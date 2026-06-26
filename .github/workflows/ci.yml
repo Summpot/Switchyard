@@ -1,0 +1,92 @@
+name: CI
+
+# Switchyard CI: build + the full test suite (Level 1/2/3) on BOTH Windows and
+# Linux. AsmResolver and MSBuild macros differ in trailing-slash / path
+# separator behaviour between the two OSes, so all integration tests must
+# pass on both. The clean-cache steps before the test run force NuGet.Protocol
+# to fetch and re-resolve on every run instead of serving stale cache entries.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Display dotnet info
+        run: dotnet --info
+
+      # ---------------------------------------------------------------------------
+      # Clean-cache contract: remove stale obj/bin trees and purge the test
+      # stub packages from the global NuGet cache before running, so
+      # NuGet.Protocol is forced to fetch and re-resolve on every run instead
+      # of serving stale cache entries.
+      # ---------------------------------------------------------------------------
+      - name: Clean stale obj/ trees
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path . -Recurse -Directory -Filter 'obj' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' -or $_.FullName -match '[\\/](?:Switchyard|test)[\\/]' } |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+          Get-ChildItem -Path . -Recurse -Directory -Filter 'bin' -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+
+      - name: Purge test stub packages from global NuGet cache
+        shell: pwsh
+        run: |
+          $pkgRoot = Join-Path $env:USERPROFILE '.nuget' 'packages'
+          foreach ($id in 'switchyard','targetlib','commonutils') {
+            $p = Join-Path $pkgRoot $id
+            if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
+          }
+
+      - name: Restore
+        run: dotnet restore Switchyard.slnx
+
+      - name: Build (Release)
+        run: dotnet build Switchyard.slnx -c Release --no-restore
+
+      # ---------------------------------------------------------------------------
+      # Level 1 first: fast in-memory unit tests. If these regress there is no
+      # point paying for the slow integration run.
+      # ---------------------------------------------------------------------------
+      - name: Level 1 — Core unit tests
+        run: dotnet test test/Switchyard.Core.Tests/Switchyard.Core.Tests.csproj -c Release --no-build --nologo
+
+      # ---------------------------------------------------------------------------
+      # Level 2 + 3: real dotnet build/publish/run of the TestSamples. Slow.
+      # The LocalFeedFixture auto-packs Switchyard/TargetLib/CommonUtils into
+      # test/local-feed and purges the stale Switchyard package from the global
+      # NuGet cache on first run.
+      # ---------------------------------------------------------------------------
+      - name: Level 2 + 3 — Integration tests
+        run: dotnet test test/Switchyard.IntegrationTests/Switchyard.IntegrationTests.csproj -c Release --no-build --nologo
+
+      # ---------------------------------------------------------------------------
+      # Optional: run the whole solution in one shot as a final guard so any
+      # project not covered by the per-level invocations above is still built.
+      # ---------------------------------------------------------------------------
+      - name: Full solution test
+        run: dotnet test Switchyard.slnx -c Release --no-build --nologo

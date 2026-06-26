@@ -27,6 +27,15 @@ public static class AssemblyWeaver
     /// DLL to <paramref name="outputPath"/> and copies the matching
     /// <c>.pdb</c> next to it.
     /// </summary>
+    /// <remarks>
+    /// Only metadata tables are touched — method bodies are left untouched,
+    /// which lets AsmResolver transparently fix up every downstream
+    /// type/member token reference. The strong-name signature is fully
+    /// removed (<c>PublicKey</c> = null, <c>HashAlgorithm</c> = None), so the
+    /// renamed assembly loses its original strong-name identity; environments
+    /// that require strong-name verification or GAC deployment must re-sign
+    /// the output with a custom key after weaving.
+    /// </remarks>
     public static void PrepareAndRename(string sourcePath, string routedName, string outputPath)
     {
         var module = ReadModule(sourcePath);

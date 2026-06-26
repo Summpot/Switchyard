@@ -23,6 +23,20 @@ namespace Switchyard.Pipeline;
 /// <c>PaymentModule</c>) so the host adds the on-disk file to the TPA list and
 /// the binder can locate it by simple name.
 /// </para>
+/// <para>
+/// Version normalisation: the <c>assemblyVersion</c>/<c>fileVersion</c> written
+/// into the runtime entry is padded to a full four-component version (e.g.
+/// <c>1.0.0</c> → <c>1.0.0.0</c>). Leaving a field unspecified would serialise
+/// the 0xFFFF sentinel, which the CLR reads back as 65535 and then fails to
+/// bind against the routed assembly's real <c>AssemblyVersion</c>.
+/// </para>
+/// <para>
+/// Publish safety: the original (un-routed) package's <c>runtime</c> member is
+/// stripped from <c>targets</c> so that the SDK's publish flow — which copies
+/// every runtime asset listed in deps.json — does not resurrect the original
+/// <c>{PackageId}.dll</c> from the NuGet cache. The library/target node itself
+/// is kept so dependency edges remain valid.
+/// </para>
 /// </remarks>
 public static class DepsJsonPatcher
 {

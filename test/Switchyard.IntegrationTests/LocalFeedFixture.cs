@@ -20,9 +20,15 @@ public sealed class LocalFeedFixture : IDisposable
 }
 
 /// <summary>
-/// Collection definition so all integration tests share a single
-/// <see cref="LocalFeedFixture"/> instance.
+/// Collection definition that pins all integration tests to a single
+/// <see cref="LocalFeedFixture"/> instance so xUnit serialises them.
 /// </summary>
+/// <remarks>
+/// Serialisation is required because the <c>TestSamples</c> are copied
+/// verbatim into the test output directory and build into the same physical
+/// <c>bin/obj</c> tree — running them in parallel causes MSBuild file-lock
+/// contention on <c>obj/switchyard/*.dll</c>.
+/// </remarks>
 [CollectionDefinition("Integration")]
 public sealed class IntegrationCollection : ICollectionFixture<LocalFeedFixture>
 {

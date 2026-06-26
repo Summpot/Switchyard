@@ -25,7 +25,13 @@ public sealed class RouteConfiguration
 
     /// <summary>
     /// Optional isolation group name (<c>&lt;SwitchyardRouteGroup&gt;</c>).
-    /// Packages sharing the same group form a closed dependency sandbox.
+    /// Packages sharing the same group form a closed dependency sandbox. For
+    /// example, if <c>TargetLib</c> depends on <c>CommonUtils</c> and both
+    /// carry <c>&lt;SwitchyardRouteGroup&gt;AuthIsolation&lt;/SwitchyardRouteGroup&gt;</c>
+    /// with <c>AuthModule=1.0.0</c>, then the 1.0.0 copy of <c>TargetLib</c>
+    /// has its internal <c>CommonUtils</c> reference forced to
+    /// <c>CommonUtils.Switchyard.1.0.0</c>, forming a closed loop and keeping
+    /// the sub-dependency chain on the same routed version.
     /// </summary>
     public string? RouteGroup { get; init; }
 

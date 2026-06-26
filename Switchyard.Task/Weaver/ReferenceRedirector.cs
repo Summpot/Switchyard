@@ -11,6 +11,14 @@ namespace Switchyard.Weaver;
 /// identity. Only metadata table entries are modified; AsmResolver transparently
 /// updates every referencing <c>TypeRef</c> token.
 /// </summary>
+/// <remarks>
+/// Runtime consequence: once renamed, two routed versions of a package are
+/// distinct type systems to the CLR. Passing a typed object from a routed
+/// package across a route boundary throws <c>InvalidCastException</c>.
+/// Cross-boundary signatures must therefore use BCL primitives or a shared,
+/// non-routed contract assembly resolved via DI. This is an architecture
+/// contract the weaver cannot enforce at weave time.
+/// </remarks>
 public static class ReferenceRedirector
 {
     /// <summary>

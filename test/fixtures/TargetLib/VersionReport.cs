@@ -6,9 +6,12 @@ namespace TargetLib;
 /// versions produce DLLs that report different version strings.
 /// </summary>
 /// <remarks>
-/// The class is intentionally non-static so that the <c>InvalidCastApp</c>
-/// boundary-tearing sample can create instances across two routed versions
-/// and observe an <c>InvalidCastException</c> at runtime.
+/// This class is intentionally non-static (while keeping a static
+/// <see cref="GetVersion"/> for convenience) so that a caller routed to a
+/// different version can <c>new VersionReport()</c> across the route boundary
+/// and observe the <c>InvalidCastException</c> the CLR throws for two
+/// unrelated type systems. A static-only class would not allow that instance
+/// to cross the boundary.
 /// </remarks>
 public class VersionReport
 {

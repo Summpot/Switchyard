@@ -10,8 +10,16 @@ namespace Switchyard;
 /// MSBuild task that performs compile-time IL weaving and reference
 /// redirection so that multiple versions of the same NuGet package can coexist
 /// in a single process. Invoked from <c>Switchyard.targets</c> after
-/// <c>ResolveAssemblyReferences</c> and before <c>CopyFilesToOutputDirectory</c>.
+/// <c>CoreCompile</c> and before <c>CopyFilesToOutputDirectory</c>.
 /// </summary>
+/// <remarks>
+/// This is Phase 1 of the pipeline. It MUST run after <c>CoreCompile</c> (not
+/// <c>ResolveAssemblyReferences</c>) so that <c>@(IntermediateAssembly)</c> —
+/// the just-built main project — exists and can itself be redirected. The
+/// downstream <c>deps.json</c> shaping and publish copy-local cleanup are
+/// performed by <see cref="SwitchyardDepsPatcherTask"/> and
+/// <see cref="SwitchyardPublishFilterTask"/> in later targets.
+/// </remarks>
 public sealed class SwitchyardTask : Task
 {
     /// <summary>
@@ -148,10 +156,12 @@ public sealed class SwitchyardTask : Task
             NewIntermediateAssembly = BuildIntermediateAssembly(result, IntermediateAssembly);
             NewRoutedAssemblies = BuildRoutedAssemblyItems(result);
 
-            // Note: deps.json patching is performed by the separate
-            // PatchSwitchyardDepsJson target, which runs AFTER the SDK's
-            // GenerateBuildDependencyFile target (the deps file is written
-            // to the output directory only at that late stage).
+            // deps.json is patched by the separate PatchSwitchyardDepsJson target,
+            // which runs AFTER the SDK's GenerateBuildDependencyFile target: the
+            // deps file only lands in the output directory at that late stage.
+            // Without that TPA injection, framework-dependent apps throw
+            // FileNotFoundException for the renamed assemblies even though the
+            // DLLs sit next to the executable.
             return true;
         }
         catch (Exception ex)
