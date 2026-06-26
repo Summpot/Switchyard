@@ -1,0 +1,55 @@
+<Project>
+
+  <PropertyGroup Condition="'$(SwitchyardEnabled)' == 'true'">
+    <SwitchyardTaskAssemblyDir Condition="'$(SwitchyardTaskAssemblyDir)' == ''">$(MSBuildThisFileDirectory)..\tasks\</SwitchyardTaskAssemblyDir>
+
+    <SwitchyardTaskAssembly Condition="$(MSBuildRuntimeType) == 'Core'">$(SwitchyardTaskAssemblyDir)net8.0\Switchyard.Task.dll</SwitchyardTaskAssembly>
+    <SwitchyardTaskAssembly Condition="$(MSBuildRuntimeType) != 'Core'">$(SwitchyardTaskAssemblyDir)net472\Switchyard.Task.dll</SwitchyardTaskAssembly>
+  </PropertyGroup>
+
+  <UsingTask TaskName="Switchyard.SwitchyardTask"
+             AssemblyFile="$(SwitchyardTaskAssembly)"
+             Condition="'$(SwitchyardEnabled)' == 'true'" />
+
+  <Target Name="ExecuteSwitchyardWeaving"
+          BeforeTargets="CopyFilesToOutputDirectory;ComputeFilesToPublish"
+          AfterTargets="ResolveAssemblyReferences"
+          Condition="'$(SwitchyardEnabled)' == 'true' And '$(DesignTimeBuild)' != 'true'">
+
+    <PropertyGroup>
+      <SwitchyardTargetFramework Condition="'$(SwitchyardTargetFramework)' == ''">$(TargetFramework)</SwitchyardTargetFramework>
+    </PropertyGroup>
+
+    <SwitchyardTask
+        PackageReferences="@(PackageReference)"
+        ReferenceCopyLocalPaths="@(ReferenceCopyLocalPaths)"
+        ProjectAssetsFile="$(ProjectAssetsFile)"
+        IntermediateOutputPath="$(IntermediateOutputPath)"
+        TargetFramework="$(SwitchyardTargetFramework)"
+        AssemblyName="$(AssemblyName)"
+        IntermediateAssembly="@(IntermediateAssembly)"
+        Silent="$(SwitchyardSilent)">
+
+      <Output TaskParameter="NewReferenceCopyLocalPaths"
+              ItemName="SwitchyardNewReferenceCopyLocalPaths" />
+      <Output TaskParameter="NewIntermediateAssembly"
+              ItemName="SwitchyardNewIntermediateAssembly" />
+    </SwitchyardTask>
+
+    <ItemGroup>
+      <ReferenceCopyLocalPaths Remove="@(ReferenceCopyLocalPaths)" />
+      <ReferenceCopyLocalPaths Include="@(SwitchyardNewReferenceCopyLocalPaths)" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'@(SwitchyardNewIntermediateAssembly)' != ''">
+      <IntermediateAssembly Remove="@(IntermediateAssembly)" />
+      <IntermediateAssembly Include="@(SwitchyardNewIntermediateAssembly)" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <FileWrites Include="$(IntermediateOutputPath)switchyard\**" />
+    </ItemGroup>
+
+  </Target>
+
+</Project>

@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="Switchyard/Switchyard.csproj" />
+  <Project Path="Switchyard.Task/Switchyard.Task.csproj" />
 </Solution>

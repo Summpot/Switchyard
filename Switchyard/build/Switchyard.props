@@ -1,0 +1,8 @@
+<Project>
+
+  <PropertyGroup>
+    <SwitchyardEnabled Condition="'$(SwitchyardEnabled)' == ''">true</SwitchyardEnabled>
+    <SwitchyardSilent Condition="'$(SwitchyardSilent)' == ''">false</SwitchyardSilent>
+  </PropertyGroup>
+
+</Project>

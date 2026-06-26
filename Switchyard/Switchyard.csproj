@@ -1,9 +1,47 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>true</IsPackable>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <BuildOutputTargetFolder>tasks</BuildOutputTargetFolder>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <PackageId>Switchyard</PackageId>
+    <Version>1.0.0</Version>
+    <Description>Compile-time IL weaving and reference redirection tool that allows multiple versions of the same NuGet package to coexist in a single process.</Description>
+    <Authors>Switchyard</Authors>
+    <PackageTags>msbuild il-weaving asmresolver nuget assembly-version routing</PackageTags>
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <Nullable>enable</Nullable>
+    <NoWarn>NU5128;NU5118;NU5131;NU5100</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Switchyard.Task\Switchyard.Task.csproj">
+      <ReferenceOutputAssembly>true</ReferenceOutputAssembly>
+    </ProjectReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="build\Switchyard.props" PackagePath="build\Switchyard.props" />
+    <Content Include="build\Switchyard.targets" PackagePath="build\Switchyard.targets" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <_TaskOutputPath>$(MSBuildThisFileDirectory)..\Switchyard.Task\bin\$(Configuration)\net8.0\</_TaskOutputPath>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);IncludeSwitchyardTaskOutputs</TargetsForTfmSpecificContentInPackage>
+  </PropertyGroup>
+
+  <Target Name="IncludeSwitchyardTaskOutputs">
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(_TaskOutputPath)*.dll"
+                              PackagePath="tasks\net8.0\%(Filename)%(Extension)" />
+      <TfmSpecificPackageFile Include="$(_TaskOutputPath)Switchyard.Task.pdb"
+                              PackagePath="tasks\net8.0\Switchyard.Task.pdb" />
+      <TfmSpecificPackageFile Include="$(_TaskOutputPath)Switchyard.Task.deps.json"
+                              PackagePath="tasks\net8.0\Switchyard.Task.deps.json" />
+    </ItemGroup>
+  </Target>
 
 </Project>
