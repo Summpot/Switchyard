@@ -3,9 +3,8 @@
 This file orients repository developers, contributors, and coding agents
 (including AI assistants) who need to modify the Switchyard codebase. It is the
 authoritative source for architecture, conventions, the test strategy, and the
-CI contract. The design rationale lives as inline comments in the source
-(referenced as `Switchyard.md §x` / `Switchyard.Tests.md §x`); this document is
-the map.
+CI contract. The design rationale lives as inline comments at the relevant
+locations in the source; this document is the map.
 
 > **Read this before making changes.** If a change touches the pipeline, the
 > MSBuild wiring, or the IL weaver, the corresponding section below applies.
@@ -36,13 +35,11 @@ test/
     PipelineInterceptTests.cs     # Level 2: bin/publish interception
     RuntimeRoutingTests.cs        # Level 3: run compiled exes, assert Stdout
     TestSamples/                  # Static sample apps (NOT in the main sln)
-      BasicRouteApp/              # §4.1 dual-version diversion (+ PaymentModule)
-      RouteGroupApp/              # §4.2 cascade sandbox
-      InvalidCastApp/             # §4.3 boundary tearing (+ BoundaryBreaker)
+      BasicRouteApp/              # dual-version diversion (+ PaymentModule)
+      RouteGroupApp/              # cascade sandbox
+      InvalidCastApp/             # boundary tearing (+ BoundaryBreaker)
   fixtures/                       # TargetLib / CommonUtils, packed at 1.0.0/2.0.0/3.5.0
 Switchyard.slnx                   # Solution (excludes TestSamples & fixtures)
-Switchyard.md                     # Detailed design document (canonical)
-Switchyard.Tests.md               # Test strategy & CI contract (canonical)
 ```
 
 `Switchyard.slnx` includes the main package, the task assembly, the two test
@@ -66,7 +63,7 @@ overwriting files in an `AfterBuild` step, so incremental builds and
 | 2     | `PatchSwitchyardDepsJson`    | `SwitchyardDepsPatcherTask`     | `AfterTargets="GenerateBuildDependencyFile;GeneratePublishDependencyFile"`, `BeforeTargets="ComputeFilesToPublish"` |
 | 3     | `SwitchyardPublishCleanup`   | `SwitchyardPublishFilterTask`   | `BeforeTargets="_ComputeResolvedCopyLocalPublishAssets"`                                       |
 
-**Why these exact hook points (critical — see `Switchyard.Tests.md §3.3 note 1`):**
+**Why these exact hook points (critical):**
 
 * Phase 1 must run `AfterTargets="CoreCompile"`, **not**
   `ResolveAssemblyReferences`. Before `CoreCompile`, `@(IntermediateAssembly)`
@@ -102,7 +99,7 @@ re-verify with the Level 2 tests.
 
 ### Two subtle correctness rules (do not regress)
 
-* **Reference version sync (`Switchyard.Tests.md §3.3 note 2`):** when
+* **Reference version sync:** when
   `ReferenceRedirector` rewrites `TargetLib → TargetLib.Switchyard.1.0.0`, it
   must also set `AssemblyReference.Version` to the four-component version
   parsed from the routed-name suffix (`1.0.0.0`). The CLR binds on
@@ -110,7 +107,7 @@ re-verify with the Level 2 tests.
   with `FileNotFoundException`. The version is padded to four components so
   AsmResolver serialises concrete `0`s instead of the `0xFFFF` "unspecified"
   sentinel (which the CLR reads as 65535).
-* **deps.json / TPA injection (`Switchyard.Tests.md §3.3 note 3`):**
+* **deps.json / TPA injection:**
   framework-dependent apps resolve assemblies only from the TPA list built out
   of `deps.json`. A renamed DLL in `bin` but not in `deps.json` throws
   `FileNotFoundException` at runtime. `DepsJsonPatcher` adds each routed
@@ -123,8 +120,8 @@ re-verify with the Level 2 tests.
 ## 3. IL weaving mechanics
 
 All metadata rewriting goes through
-[AsmResolver](https://github.com/Washi1337/AsmResolver). The key insight
-(`Switchyard.md §4`) is that renaming `AssemblyDefinition.Name` and clearing
+[AsmResolver](https://github.com/Washi1337/AsmResolver). The key insight is
+that renaming `AssemblyDefinition.Name` and clearing
 the strong name only touches the metadata definition tables — AsmResolver
 transparently fixes up every downstream `TypeRef` / `MemberRef` token, so we
 never scan method bodies.
@@ -143,7 +140,7 @@ never scan method bodies.
   pipeline does not rewrite assemblies that do not reference any routed
   package.
 
-### Limitations baked into the design (`Switchyard.md §6`)
+### Limitations baked into the design
 
 * Strong names are stripped → re-sign the output if your environment requires
   strong-name verification or GAC deployment.
@@ -157,7 +154,7 @@ these.
 
 ---
 
-## 4. Runtime type-boundary contract (`Switchyard.md §5`)
+## 4. Runtime type-boundary contract
 
 Post-weaving, V1.0.0 and V3.5.0 of a package are **two unrelated type systems**
 to the CLR. Crossing a route boundary with a typed object throws
@@ -175,7 +172,7 @@ Guidance to surface to users:
 
 ---
 
-## 5. Test strategy — an inverted pyramid (`Switchyard.Tests.md §1`)
+## 5. Test strategy — an inverted pyramid
 
 Switchyard is a CLR-runtime + MSBuild-pipeline tool. Most defects only surface
 in a real physical build, so the test pyramid is inverted: E2E is the backbone,
@@ -190,7 +187,7 @@ Level 1: Core algorithm unit tests — in-memory AsmResolver symbol rewrite
 ### Level 1 — `Switchyard.Core.Tests` (milliseconds, no physical build)
 
 Uses `TestAssemblyFactory` to generate assemblies in-memory with AsmResolver.
-Covers the three core algorithms from `Switchyard.Tests.md §3.1`:
+Covers the three core algorithms:
 
 * `AssemblyRenameTests` — use case 1 "Def-Reshaping": name rewritten, strong
   name fully stripped, output re-readable, netmodule rejected.
@@ -217,13 +214,13 @@ Covers the three core algorithms from `Switchyard.Tests.md §3.1`:
 * `RuntimeRoutingTests` (Level 3): run the compiled exes and assert Stdout
   proves dual-version diversion, type-boundary tearing, and cascade versions.
 
-### Edge/matrix tests always in the suite (`Switchyard.Tests.md §4`)
+### Edge/matrix tests always in the suite
 
-* §4.1 shadow hot-download — a route referencing a version absent from the
+* shadow hot-download — a route referencing a version absent from the
   global cache; `PackageResolver` fetches it from NuGet upstream.
-* §4.2 RouteGroup cascade — deep-inspect the renamed DLL and assert its
+* RouteGroup cascade — deep-inspect the renamed DLL and assert its
   internal reference has been cascaded.
-* §4.3 boundary tearing — `InvalidCastApp` expects `InvalidCastException`,
+* boundary tearing — `InvalidCastApp` expects `InvalidCastException`,
   exits 0.
 
 When you add a feature, add a corresponding Level 1 test (fast) and a
@@ -236,14 +233,13 @@ Level 2/3 sample if the feature changes the file stream or runtime behaviour.
 * **Language/framework:** C# latest, .NET 8.0, `Nullable` enabled, `ImplicitUsings`
   enabled. The task assembly targets `net8.0`.
 * **Comments:** XML doc comments (`///`) on every public type and member.
-  File-level design context lives in a header comment block at the top of each
-  file (see existing files). Reference design sections as
-  `Switchyard.md §x` / `Switchyard.Tests.md §x`.
+  Design context lives as inline comments at the relevant location in the
+  source (not in separate design documents).
 * **No inline comments that duplicate the code.** Comments explain *why*,
   especially MSBuild hook ordering, version-sync rules, and TPA injection.
-* **Do not add comments to code unless asked** — but the design-context header
-  blocks and `///` docs are the established convention here and must be
-  maintained when you change the corresponding logic.
+* **Do not add comments to code unless asked** — but the design-context
+  `///` docs and inline `why` comments are the established convention here
+  and must be maintained when you change the corresponding logic.
 * **Path handling:** always normalise relative paths MSBuild hands you with
   `Path.GetFullPath` before traversing (see `SwitchyardPipeline.Create`). The
   task runs with the working directory set to the project directory.
@@ -283,7 +279,7 @@ from the global NuGet cache automatically — no manual cleanup needed locally.
 
 ---
 
-## 8. CI contract (`Switchyard.Tests.md §5`)
+## 8. CI contract
 
 1. **OS matrix:** run on **both** `windows-latest` and `ubuntu-latest`.
    AsmResolver and MSBuild macros differ in trailing-slash / path-separator
@@ -292,8 +288,8 @@ from the global NuGet cache automatically — no manual cleanup needed locally.
 2. **Clean-cache contract:** before the test step, clean `obj/` and purge the
    test stub packages from the global NuGet cache so `NuGet.Protocol`'s fetch
    and resolve paths are exercised on every run.
-3. The workflow lives at `.github/workflows/ci.yml` and is the source of truth
-   for the canonical CI sequence.
+3. The CI workflow lives at `.github/workflows/ci.yml`; the publish workflow
+   lives at `.github/workflows/publish.yml`.
 
 ---
 
@@ -305,14 +301,14 @@ Before submitting a change, verify:
 - [ ] `dotnet test Switchyard.slnx` passes — including the slow integration
       tests. If you skip them locally, CI will catch regressions.
 - [ ] If you changed the MSBuild wiring, the Level 2 tests still pass and you
-      have re-derived the hook points from §2 of this document.
+      have re-derived the hook points from the architecture section above.
 - [ ] If you changed the weaver, the Level 1 tests still pass and you added a
+      new one for the new behaviour.
       new one for the new behaviour.
 - [ ] If you changed the deps.json patcher or publish filter, the Level 3
       runtime tests still pass (they exercise the TPA list end-to-end).
-- [ ] XML doc comments and file-header design context are updated to reflect
-      the change, citing the relevant `Switchyard.md §x` / `Switchyard.Tests.md
-      §x` section.
+- [ ] XML doc comments and inline design context are updated to reflect
+      the change.
 - [ ] No new heavy dependencies were introduced.
 - [ ] Commit messages are concise and match the repo style.
 
@@ -320,9 +316,9 @@ Before submitting a change, verify:
 
 ## 10. Canonical references
 
-* `Switchyard.md` — full design document (configuration schema, pipeline, IL
-  weaving, type-boundary contract, limitations, package layout).
-* `Switchyard.Tests.md` — test strategy, test project topology, per-level test
-  cases, edge/matrix tests, CI contract.
-* Inline file-header comments in each source file cite the relevant sections
-  of the two documents above. When in doubt, start there.
+* `AGENTS.md` (this file) — architecture, conventions, test strategy, CI
+  contract.
+* `README.md` — user-facing introduction, configuration, and runtime contract.
+* Inline comments at the relevant source location — the *why* for MSBuild hook
+  ordering, version-sync rules, TPA injection, and the type-boundary contract.
+  When in doubt, start there.

@@ -1,0 +1,121 @@
+name: publish
+
+# Publishes the Switchyard NuGet package.
+#
+#   * On a git tag push (refs/tags/v*): publish to nuget.org using the
+#     NUGET_API_KEY secret. The package version is derived from the tag
+#     (the leading 'v' is stripped, so 'v1.2.3' -> '1.2.3').
+#   * On any other trigger (branch push, manual dispatch): publish a
+#     continuously-versioned prerelease to GitHub Packages using GITHUB_TOKEN.
+#     The version is suffixed so each run produces a unique, uploadable
+#     package (GitHub Packages rejects re-uploading an existing version).
+#
+# Required secrets for the nuget.org path:
+#   NUGET_API_KEY  — a nuget.org API key with push permission.
+# The GitHub Packages path authenticates with the auto-provided GITHUB_TOKEN.
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  publish:
+    name: Publish (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # ---------------------------------------------------------------------------
+      # Compute the package version.
+      #
+      # Tag push  -> strip the leading 'v' from the tag (v1.2.3 -> 1.2.3).
+      # Otherwise  -> '<base>-ci.<run_number>+<sha>' prerelease, unique per run.
+      # ---------------------------------------------------------------------------
+      - name: Resolve package version
+        id: version
+        shell: pwsh
+        run: |
+          $base = '1.0.0'
+          if ($env:GITHUB_REF -match '^refs/tags/v?(.+)$') {
+            $ver = $matches[1]
+          } else {
+            $sha = $env:GITHUB_SHA.Substring(0,7)
+            $ver = "$base-ci.$env:GITHUB_RUN_NUMBER+$sha"
+          }
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Package version: $ver"
+
+      - name: Determine target feed
+        id: feed
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -match '^refs/tags/') {
+            "is_tag=true"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "is_tag=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
+      - name: Build & pack
+        run: >
+          dotnet pack Switchyard/Switchyard.csproj
+          -c Release
+          -p:PackageVersion=${{ steps.version.outputs.version }}
+          -o ${{ runner.temp }}/nupkgs
+          --nologo
+
+      # ---------------------------------------------------------------------------
+      # Path A — git tag: push to nuget.org.
+      # ---------------------------------------------------------------------------
+      - name: Push to nuget.org
+        if: steps.feed.outputs.is_tag == 'true'
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push "${{ runner.temp }}/nupkgs/*.nupkg" `
+            --api-key "$env:NUGET_API_KEY" `
+            --source https://api.nuget.org/v3/index.json `
+            --skip-duplicate
+        shell: pwsh
+
+      # ---------------------------------------------------------------------------
+      # Path B — no tag: push to GitHub Packages.
+      #
+      # GitHub Packages authenticates with the GITHUB_TOKEN using the literal
+      # username "github" and the token as the password/API key. We register
+      # the source per-job so the token never lands in nuget.config on disk.
+      # ---------------------------------------------------------------------------
+      - name: Push to GitHub Packages
+        if: steps.feed.outputs.is_tag != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $owner = $env:GITHUB_REPOSITORY.Split('/')[0].ToLowerInvariant()
+          $source = "https://nuget.pkg.github.com/$owner/index.json"
+          dotnet nuget push "${{ runner.temp }}/nupkgs/*.nupkg" `
+            --api-key "$env:GH_TOKEN" `
+            --source "$source" `
+            --skip-duplicate
