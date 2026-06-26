@@ -3,6 +3,7 @@ using NuGet.Configuration;
 using NuGet.Frameworks;
 using NuGet.Packaging;
 using NuGet.Packaging.Core;
+using NuGet.Packaging.PackageExtraction;
 using NuGet.Protocol;
 using NuGet.Protocol.Core.Types;
 using NuGet.Versioning;
@@ -130,7 +131,7 @@ public sealed class PackageResolver
 
                 if (result.Status == DownloadResourceResultStatus.Available && result.PackageStream is not null)
                 {
-                    await ExtractToGlobalPackagesAsync(identity, result.PackageStream, installPath, cancellationToken);
+                    await ExtractToGlobalPackagesAsync(identity, repo.PackageSource.Source, result.PackageStream, installPath, cancellationToken);
                     return;
                 }
             }
@@ -147,30 +148,35 @@ public sealed class PackageResolver
 
     private async Task ExtractToGlobalPackagesAsync(
         PackageIdentity identity,
+        string source,
         Stream packageStream,
         string installPath,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(installPath);
 
-        var nupkgPath = Path.Combine(installPath, identity.Id.ToLowerInvariant() + "." +
-            identity.Version.ToNormalizedString().ToLowerInvariant() + ".nupkg");
+        // Use NuGet's standard PackageExtractor which correctly handles the
+        // full extraction (nupkg, nuspec, lib files, etc.) into the global
+        // packages folder layout.
+        var extractionContext = new PackageExtractionContext(
+            PackageSaveMode.Defaultv3,
+            PackageExtractionBehavior.XmlDocFileSaveMode,
+            clientPolicyContext: null,
+            NuGetLog);
 
-        using (var fs = File.Create(nupkgPath))
-        {
-            packageStream.Seek(0, SeekOrigin.Begin);
-            await packageStream.CopyToAsync(fs, 8192, cancellationToken);
-        }
+        var pathResolver = new VersionFolderPathResolver(_globalPackagesFolder);
 
-        using var reader = new PackageArchiveReader(nupkgPath);
-        var files = reader.GetFiles().ToList();
-        reader.CopyFiles(installPath, files, (name, target, s) =>
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            using var targetStream = File.Create(target);
-            s.CopyTo(targetStream);
-            return name;
-        }, NuGetLog, cancellationToken);
+        await PackageExtractor.InstallFromSourceAsync(
+            source,
+            identity,
+            stream =>
+            {
+                packageStream.Seek(0, SeekOrigin.Begin);
+                return packageStream.CopyToAsync(stream, 8192, cancellationToken);
+            },
+            pathResolver,
+            extractionContext,
+            cancellationToken);
     }
 
     private static bool IsPackageExtracted(string installPath)

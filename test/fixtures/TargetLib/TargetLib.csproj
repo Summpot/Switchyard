@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>TargetLib</PackageId>
+    <AssemblyVersion>$(TargetLibAssemblyVersion)</AssemblyVersion>
+    <FileVersion>$(TargetLibAssemblyVersion)</FileVersion>
+    <Version>$(TargetLibPackageVersion)</Version>
+    <PackageVersion>$(TargetLibPackageVersion)</PackageVersion>
+    <IsPackable>true</IsPackable>
+    <IncludeSymbols>false</IncludeSymbols>
+    <NoWarn>NU5105</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(CommonUtilsPackageVersion)' != ''">
+    <PackageReference Include="CommonUtils" Version="$(CommonUtilsPackageVersion)" />
+  </ItemGroup>
+
+</Project>

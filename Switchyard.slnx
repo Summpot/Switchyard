@@ -1,4 +1,7 @@
 <Solution>
   <Project Path="Switchyard/Switchyard.csproj" />
   <Project Path="Switchyard.Task/Switchyard.Task.csproj" />
+  <Project Path="test/Switchyard.Core.Tests/Switchyard.Core.Tests.csproj" />
+  <Project Path="test/Switchyard.TestFixtures/Switchyard.TestFixtures.csproj" />
+  <Project Path="test/Switchyard.IntegrationTests/Switchyard.IntegrationTests.csproj" />
 </Solution>

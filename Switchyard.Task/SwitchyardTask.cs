@@ -78,6 +78,15 @@ public sealed class SwitchyardTask : Task
     [Output]
     public ITaskItem? NewIntermediateAssembly { get; set; }
 
+    /// <summary>
+    /// The routed (renamed) target assemblies produced by the pipeline, each
+    /// carrying <c>RoutedName</c>, <c>Version</c> and <c>FileName</c>
+    /// metadata. Consumed by the separate <c>PatchSwitchyardDepsJson</c>
+    /// target which rewrites <c>deps.json</c> after the SDK generates it.
+    /// </summary>
+    [Output]
+    public ITaskItem[]? NewRoutedAssemblies { get; set; }
+
     public override bool Execute()
     {
         var configurations = ConfigurationParser.Parse(PackageReferences);
@@ -115,7 +124,12 @@ public sealed class SwitchyardTask : Task
             }
         }
         if (IntermediateAssembly is not null && !string.IsNullOrWhiteSpace(IntermediateAssembly.ItemSpec))
+        {
             callerPaths.Add(IntermediateAssembly.ItemSpec);
+            LogMessage($"Switchyard: added IntermediateAssembly {IntermediateAssembly.ItemSpec}");
+        }
+
+        LogMessage($"Switchyard: {callerPaths.Count} caller path(s) received.");
 
         try
         {
@@ -132,13 +146,20 @@ public sealed class SwitchyardTask : Task
 
             NewReferenceCopyLocalPaths = BuildOutputItems(result, ReferenceCopyLocalPaths);
             NewIntermediateAssembly = BuildIntermediateAssembly(result, IntermediateAssembly);
+            NewRoutedAssemblies = BuildRoutedAssemblyItems(result);
 
+            // Note: deps.json patching is performed by the separate
+            // PatchSwitchyardDepsJson target, which runs AFTER the SDK's
+            // GenerateBuildDependencyFile target (the deps file is written
+            // to the output directory only at that late stage).
             return true;
         }
         catch (Exception ex)
         {
             Log.LogError("Switchyard pipeline failed: " + ex.Message);
-            LogMessage(ex.ToString());
+            LogMessage("Switchyard full exception details: " + ex);
+            for (var inner = ex.InnerException; inner is not null; inner = inner.InnerException)
+                LogMessage("  Inner: " + inner.GetType().Name + ": " + inner.Message);
             return false;
         }
     }
@@ -203,9 +224,25 @@ public sealed class SwitchyardTask : Task
         return original;
     }
 
+    private static ITaskItem[] BuildRoutedAssemblyItems(SwitchyardResult result)
+    {
+        var items = new List<ITaskItem>();
+        foreach (var prepared in result.PreparedAssemblies)
+        {
+            if (!prepared.IsRouted)
+                continue;
+            var item = new TaskItem(prepared.PackageId);
+            item.SetMetadata("RoutedName", Path.GetFileNameWithoutExtension(prepared.DllPath));
+            item.SetMetadata("RoutedVersion", prepared.Version);
+            item.SetMetadata("RoutedFileName", Path.GetFileName(prepared.DllPath));
+            items.Add(item);
+        }
+        return items.ToArray();
+    }
+
     private void LogMessage(string message)
     {
         if (!Silent)
-            Log.LogMessage(MessageImportance.Normal, message);
+            Log.LogMessage(MessageImportance.High, message);
     }
 }

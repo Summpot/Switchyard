@@ -25,17 +25,29 @@
 test/
 ├── Switchyard.Core.Tests/       # Level 1: 针对元数据重写算法的单元测试工程
 │   ├── AssemblyRenameTests.cs   # 程序集重命名算法测试
-│   └── ReferenceRedirectTests.cs# 引用关系洗脑重定向测试
-└── Switchyard.IntegrationTests/ # Level 2 & 3: 管道集成与 E2E 运行时测试主工程
-    ├── BuildUtility.cs          # 封装和隔离 dotnet CLI 调用的全局工具类
-    ├── PipelineInterceptTests.cs# 增量编译阻断、Publish 集合拦截测试
-    ├── RuntimeRoutingTests.cs   # E2E 运行时输出断言测试
-    └── TestSamples/             # 预先定义好的、不引入主 Sln 编译的外部测试样本
-        ├── BasicRouteApp/       # 基础双版本路由分流测试样本
-        ├── RouteGroupApp/       # 级联闭环隔离组测试样本
-        └── InvalidCastApp/      # 故意违反契约的边界撕裂测试样本
+│   ├── ConfigurationParserTests.cs # 路由配置 / RouteGroup 解析测试
+│   ├── PdbAlignmentTests.cs     # 调试符号对齐（MVID / CodeView 路径）测试
+│   ├── ReferenceRedirectTests.cs# 引用关系洗脑重定向测试
+│   └── TestAssemblyFactory.cs   # 用 AsmResolver 内存生成测试程序集的工厂
+├── Switchyard.TestFixtures/     # 携带可移植 PDB 的标记程序集，供 PdbAlignmentTests 使用
+├── Switchyard.IntegrationTests/ # Level 2 & 3: 管道集成与 E2E 运行时测试主工程
+│   ├── BuildUtility.cs          # 封装 dotnet CLI、本地 NuGet feed 打包与全局缓存清理
+│   ├── LocalFeedFixture.cs      # xUnit 集合级 Fixture，确保本地 feed 就绪
+│   ├── PipelineInterceptTests.cs# 增量编译阻断、Publish 集合拦截、级联沙箱测试
+│   ├── RuntimeRoutingTests.cs   # E2E 运行时输出断言测试
+│   └── TestSamples/             # 预先定义好的、不引入主 Sln 编译的外部测试样本
+│       ├── BasicRouteApp/       # 基础双版本路由分流测试样本（含 PaymentModule 子工程）
+│       ├── RouteGroupApp/       # 级联闭环隔离组测试样本
+│       ├── InvalidCastApp/      # 故意违反契约的边界撕裂测试样本（含 BoundaryBreaker 子工程）
+│       └── nuget.config         # 指向 test/local-feed 的本地源
+└── fixtures/                    # 被打包成多版本 NuGet 包的源桩程序集
+    ├── TargetLib/               # 以 AssemblyVersion 区分 1.0.0 / 2.0.0 / 3.5.0 三个包版本
+    ├── CommonUtils/             # TargetLib 的级联依赖，同样按版本打包
+    └── nuget.config
 
 ```
+
+> 说明：`fixtures/` 下的 `TargetLib`、`CommonUtils` 通过 `dotnet pack -p:...PackageVersion=...` 在测试启动时被打包成 1.0.0 / 2.0.0 / 3.5.0 三个版本，写入 `test/local-feed`，再由各 `TestSamples` 引用。`Switchyard` 包本身也每次重新打包并清除全局 NuGet 缓存中的旧副本，以保证 `.targets` / Task DLL 的最新改动生效。
 
 ---
 
@@ -93,7 +105,8 @@ test/
 
 * **用例 3：发布管道信息无损传递（Publish Verification）**
 * **步骤**：执行 `dotnet publish -c Release`。
-* **断言**：验证 `bin/Release/net8.0/publish/` 目录下同样完美包含全套魔改程序集，主程序集没有发生依赖项降级回滚。
+* **断言**：验证 `bin/Release/net8.0/publish/` 目录下同样完美包含全套魔改程序集（`TargetLib.Switchyard.1.0.0.dll`、`TargetLib.Switchyard.3.5.0.dll`），原厂 `TargetLib.dll` 绝不能出现，且运行发布产物应得到与 Debug 一致的双版本分流输出。
+* **实现备注**：publish 会从锁文件重新解析 copy-local 资产、把原厂 DLL 再次拉回，因此由独立的 `SwitchyardPublishCleanup` 目标（`SwitchyardPublishFilterTask`）在 `_ComputeResolvedCopyLocalPublishAssets` 之前对 `ReferenceCopyLocalPaths` 与 `_ResolvedCopyLocalPublishAssets` 做二次剔除。
 
 
 
@@ -105,28 +118,35 @@ test/
 
 ```csharp
 [Fact]
-public void Run_BasicRouteApp_And_Assert_True_Version_Diversion()
+public void Run_BasicRouteApp_AssertsDualVersionDiversion()
 {
-    // 准备工作：指定测试项目路径与编译产物可执行文件路径
-    string projectPath = Path.Combine(AppContext.BaseDirectory, "TestSamples", "BasicRouteApp", "BasicRouteApp.csproj");
-    string exePath = Path.Combine(AppContext.BaseDirectory, "TestSamples", "BasicRouteApp", "bin", "Debug", "net8.0", "BasicRouteApp.exe");
+    string projectPath = Path.Combine(BuildUtility.TestSamplesPath, "BasicRouteApp", "BasicRouteApp.csproj");
+    BuildUtility.CleanProject(projectPath);
 
-    // 1. 触发物理清理与编译
-    BuildUtility.RunCommand("dotnet", $"clean \"{projectPath}\"");
-    var buildResult = BuildUtility.RunCommand("dotnet", $"build \"{projectPath}\"");
-    Assert.Equal(0, buildResult.ExitCode);
+    var buildResult = BuildUtility.BuildProject(projectPath);
+    Assert.True(buildResult.Success, $"Build failed:\n{buildResult.StandardError}");
 
-    // 2. 启动编译出的端到端目标控制台进程，捕获其标准控制台输出
-    var runResult = BuildUtility.RunCommand(exePath, "");
-    Assert.Equal(0, runResult.ExitCode);
+    string exePath = BuildUtility.FindBuiltExecutable("BasicRouteApp");
+    string binDir = BuildUtility.GetBinDirectory("BasicRouteApp");
+    Assert.True(File.Exists(exePath), $"Built executable not found at {exePath}");
 
-    // 3. 终极行为阻断断言（正则匹配控制台特征日志）
+    var runResult = BuildUtility.RunExecutable(exePath, binDir);
+
     // 证实：主程序集和三方依赖项在没有任何 ALC 隔离的情况下，确实读取到了两个独立版本的 DLL
     Assert.Contains("[MAIN_APP] TargetLib loaded version: 1.0.0.0", runResult.StandardOutput);
     Assert.Contains("[PAYMENT_MODULE] TargetLib loaded version: 3.5.0.0", runResult.StandardOutput);
 }
-
 ```
+
+> 全部集成测试共享同一个 `[Collection("Integration")]`，由 xUnit 串行执行。这是因为各 `TestSamples` 被原样复制到测试输出目录后，多个用例会构建到同一份物理 `bin/obj` 树上，并行执行会触发 MSBuild 对 `obj/switchyard/*.dll` 的文件锁竞争。`LocalFeedFixture` 作为集合级 Fixture 负责一次性把 `Switchyard` / `TargetLib` / `CommonUtils` 打包进 `test/local-feed` 并清空全局 NuGet 缓存中的旧 `switchyard` 包。
+
+#### 实现层面必须解决的三个底层坑位
+
+下列问题在方案设计时未显式列出，但在真实落地中必须处理，否则 Level 2/3 全部无法通过：
+
+1. **Task 挂载时机**：`ExecuteSwitchyardWeaving` 必须 `AfterTargets="CoreCompile"`（而非 `ResolveAssemblyReferences`），否则 `@(IntermediateAssembly)` 尚未生成，主程序集自身的引用永远得不到重定向。但其对 `deps.json` 的改写又必须放在 `GenerateBuildDependencyFile` 之后（该目标被 SDK 追加在 `CopyFilesToOutputDirectory` 之后），因此拆成 `ExecuteSwitchyardWeaving` + `PatchSwitchyardDepsJson` 两个目标。
+2. **引用版本号同步**：`ReferenceRedirector` 在改名 `TargetLib → TargetLib.Switchyard.1.0.0` 的同时必须把 `AssemblyReference.Version` 同步成 `1.0.0.0`（从路由名后缀解析并补齐为四段式，避免 `0xFFFF` “未指定”哨位被 CLR 读成 65535）。否则 CLR 按 `(Name, Version, PublicKey)` 绑定失败。
+3. **deps.json / TPA 注入**：.NET Core 框架依赖型应用只从 `deps.json` 构建的 TPA 列表解析程序集，放在 `bin` 目录下但不在 `deps.json` 里的 `TargetLib.Switchyard.*.dll` 运行时仍会 `FileNotFoundException`。`DepsJsonPatcher` 把每个路由程序集作为合成 `"type":"project"` 库写进 `targets`/`libraries`，并清掉原厂包的 `runtime` 条目，使其既进入 TPA 又不会被 publish 从 NuGet 全局缓存里原样拷回。publish 阶段还需 `SwitchyardPublishCleanup` 目标用 `SwitchyardPublishFilterTask` 把锁文件重新解析进来的原厂 DLL 从 `ReferenceCopyLocalPaths` / `_ResolvedCopyLocalPublishAssets` 里再剔除一次。
 
 ---
 
@@ -142,12 +162,13 @@ public void Run_BasicRouteApp_And_Assert_True_Version_Diversion()
 ### 4.2 级联依赖沙箱完整性断言（RouteGroup 破坏性验证）
 
 * **测试设计**：启用高级元数据 `<SwitchyardRouteGroup>AuthSandbox</SwitchyardRouteGroup>`，其中 `TargetLib` 依赖 `CommonUtils`。
-* **预期行为**：编译完成后，自动化测试使用 AsmResolver **深度逆向打开** 已经重命名过的 `TargetLib.Switchyard.1.0.0.dll`，检查其引用的元数据表。断言其对 `CommonUtils` 的内部调用**已经级联改变**指向了 `CommonUtils.Switchyard.1.0.0`。
+* **预期行为**：编译完成后，自动化测试使用 AsmResolver **深度逆向打开** 已经重命名过的 `TargetLib.Switchyard.1.0.0.dll`，检查其引用的元数据表。断言其对 `CommonUtils` 的内部调用**已经级联改变**指向了 `CommonUtils.Switchyard.1.0.0`，同时 `bin` 目录下原厂 `TargetLib.dll` / `CommonUtils.dll` 均不存在。E2E 运行 `RouteGroupApp` 时主程序与 `CommonUtils` 直读版本均落到 `1.0.0.0`。
 
 ### 4.3 契约崩溃边界断言（InvalidCast 阻断测试）
 
-* **测试设计**：编写 `InvalidCastApp` 样本，故意在代码中打破隔离契约（让路由到 V3.5.0 的模块，向路由到 V1.0.0 的主程序跨边界回传一个原厂类型实例，主程序直接强转接收）。
-* **预期行为**：执行端到端运行，进程必须崩溃，且捕获的标准错误流（`Stderr`）中必须包含经典的 `.NET 运行时异常：System.InvalidCastException`。以此证明两者的类型系统在 CLR 内部已被干净利落地切断。
+* **测试设计**：编写 `InvalidCastApp` 样本，故意在代码中打破隔离契约：`BoundaryBreaker`（路由到 V3.5.0）通过 `GetVersionHolder()` 返回一个 `TargetLib.VersionReport` 实例，主程序（路由到 V1.0.0）直接强转接收。
+* **预期行为**：执行端到端运行，主程序捕获到 `System.InvalidCastException`（消息形如 `[A]TargetLib.VersionReport cannot be cast to [B]TargetLib.VersionReport ... originates from 'TargetLib.Switchyard.3.5.0' ... 'TargetLib.Switchyard.1.0.0'`），样本在 `catch` 块中输出 `Type boundary successfully torn.` 并以 `ExitCode=0` 退出。以此证明两者的类型系统在 CLR 内部已被干净利落地切断。
+* **实现备注**：`TargetLib.VersionReport` 被设计为非静态类（保留静态 `GetVersion()`），以便 `BoundaryBreaker` 能 `new VersionReport()` 跨路由版本制造类型实例。
 
 ---
 

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>BasicRouteApp</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <SwitchyardEnabled>true</SwitchyardEnabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Switchyard" Version="1.0.0" />
+    <PackageReference Include="TargetLib" Version="2.0.0">
+      <SwitchyardRoutes>BasicRouteApp=1.0.0;PaymentModule=3.5.0</SwitchyardRoutes>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PaymentModule\PaymentModule.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -11,9 +11,24 @@
              AssemblyFile="$(SwitchyardTaskAssembly)"
              Condition="'$(SwitchyardEnabled)' == 'true'" />
 
+  <UsingTask TaskName="Switchyard.SwitchyardDepsPatcherTask"
+             AssemblyFile="$(SwitchyardTaskAssembly)"
+             Condition="'$(SwitchyardEnabled)' == 'true'" />
+
+  <UsingTask TaskName="Switchyard.SwitchyardPublishFilterTask"
+             AssemblyFile="$(SwitchyardTaskAssembly)"
+             Condition="'$(SwitchyardEnabled)' == 'true'" />
+
+  <!--
+    Phase 1: weave/redirect.
+
+    Runs before CopyFilesToOutputDirectory so the rewritten caller assemblies
+    and the renamed target assemblies replace the originals in the copy-local
+    stream. Must run after CoreCompile so @(IntermediateAssembly) exists.
+  -->
   <Target Name="ExecuteSwitchyardWeaving"
           BeforeTargets="CopyFilesToOutputDirectory;ComputeFilesToPublish"
-          AfterTargets="ResolveAssemblyReferences"
+          AfterTargets="CoreCompile"
           Condition="'$(SwitchyardEnabled)' == 'true' And '$(DesignTimeBuild)' != 'true'">
 
     <PropertyGroup>
@@ -33,7 +48,9 @@
       <Output TaskParameter="NewReferenceCopyLocalPaths"
               ItemName="SwitchyardNewReferenceCopyLocalPaths" />
       <Output TaskParameter="NewIntermediateAssembly"
-              ItemName="SwitchyardNewIntermediateAssembly" />
+              PropertyName="SwitchyardNewIntermediateAssemblyPath" />
+      <Output TaskParameter="NewRoutedAssemblies"
+              ItemName="SwitchyardRoutedAssemblies" />
     </SwitchyardTask>
 
     <ItemGroup>
@@ -41,15 +58,67 @@
       <ReferenceCopyLocalPaths Include="@(SwitchyardNewReferenceCopyLocalPaths)" />
     </ItemGroup>
 
-    <ItemGroup Condition="'@(SwitchyardNewIntermediateAssembly)' != ''">
+    <ItemGroup Condition="'$(SwitchyardNewIntermediateAssemblyPath)' != '' And '$(SwitchyardNewIntermediateAssemblyPath)' != '@(IntermediateAssembly->'%(FullPath)')'">
       <IntermediateAssembly Remove="@(IntermediateAssembly)" />
-      <IntermediateAssembly Include="@(SwitchyardNewIntermediateAssembly)" />
+      <IntermediateAssembly Include="$(SwitchyardNewIntermediateAssemblyPath)" />
     </ItemGroup>
 
     <ItemGroup>
       <FileWrites Include="$(IntermediateOutputPath)switchyard\**" />
     </ItemGroup>
 
+  </Target>
+
+  <!--
+    Phase 2: deps.json shaping.
+  -->
+  <Target Name="PatchSwitchyardDepsJson"
+          AfterTargets="GenerateBuildDependencyFile;GeneratePublishDependencyFile"
+          BeforeTargets="ComputeFilesToPublish"
+          Condition="'$(SwitchyardEnabled)' == 'true' And '$(DesignTimeBuild)' != 'true' And '@(SwitchyardRoutedAssemblies)' != ''">
+
+    <SwitchyardDepsPatcherTask
+        DepsFilePath="$(ProjectDepsFilePath)"
+        RoutedAssemblies="@(SwitchyardRoutedAssemblies)"
+        Silent="$(SwitchyardSilent)" />
+
+  </Target>
+
+  <!--
+    Phase 3: publish copy-local cleanup.
+
+    The publish pipeline re-resolves copy-local assets from the lock file
+    (ResolveLockFileCopyLocalFiles / _ResolvedCopyLocalBuildAssets), which
+    resurrects the original un-routed package DLLs (e.g. TargetLib.dll) into
+    the publish file stream even though the build phase removed them from
+    @(ReferenceCopyLocalPaths). This target runs right before the publish
+    asset list is finalised and strips the original package DLLs back out of
+    both @(ReferenceCopyLocalPaths) and @(_ResolvedCopyLocalPublishAssets) so
+    only the routed (renamed) assemblies reach the publish directory.
+  -->
+  <Target Name="SwitchyardPublishCleanup"
+          BeforeTargets="_ComputeResolvedCopyLocalPublishAssets"
+          Condition="'$(SwitchyardEnabled)' == 'true' And '@(SwitchyardRoutedAssemblies)' != ''">
+
+    <SwitchyardPublishFilterTask CopyLocalItems="@(ReferenceCopyLocalPaths)"
+                                 RoutedAssemblies="@(SwitchyardRoutedAssemblies)">
+      <Output TaskParameter="FilteredItems" ItemName="_SwitchyardFilteredRefCopyLocal" />
+    </SwitchyardPublishFilterTask>
+    <SwitchyardPublishFilterTask CopyLocalItems="@(_ResolvedCopyLocalPublishAssets)"
+                                 RoutedAssemblies="@(SwitchyardRoutedAssemblies)">
+      <Output TaskParameter="FilteredItems" ItemName="_SwitchyardFilteredPublishAssets" />
+    </SwitchyardPublishFilterTask>
+
+    <ItemGroup>
+      <ReferenceCopyLocalPaths Remove="@(ReferenceCopyLocalPaths)" />
+      <ReferenceCopyLocalPaths Include="@(_SwitchyardFilteredRefCopyLocal)" />
+      <_ResolvedCopyLocalPublishAssets Remove="@(_ResolvedCopyLocalPublishAssets)" />
+      <_ResolvedCopyLocalPublishAssets Include="@(_SwitchyardFilteredPublishAssets)" />
+    </ItemGroup>
+
+    <Message Text="Switchyard: publish cleanup stripped original package DLLs for @(SwitchyardRoutedAssemblies->'%(Identity)', ' ')"
+             Condition="'$(SwitchyardSilent)' != 'true'"
+             Importance="high" />
   </Target>
 
 </Project>

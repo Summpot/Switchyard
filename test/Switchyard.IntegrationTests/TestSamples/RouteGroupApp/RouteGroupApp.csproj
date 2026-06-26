@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>RouteGroupApp</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <SwitchyardEnabled>true</SwitchyardEnabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Switchyard" Version="1.0.0" />
+    <PackageReference Include="TargetLib" Version="2.0.0">
+      <SwitchyardRoutes>RouteGroupApp=1.0.0</SwitchyardRoutes>
+      <SwitchyardRouteGroup>AuthSandbox</SwitchyardRouteGroup>
+    </PackageReference>
+    <PackageReference Include="CommonUtils" Version="2.0.0">
+      <SwitchyardRoutes>RouteGroupApp=1.0.0</SwitchyardRoutes>
+      <SwitchyardRouteGroup>AuthSandbox</SwitchyardRouteGroup>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

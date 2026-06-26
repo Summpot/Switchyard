@@ -107,6 +107,14 @@ public sealed class SwitchyardPipeline
         string? projectAssetsFile,
         string assemblyName)
     {
+        // MSBuild frequently passes relative paths (e.g. "obj\project.assets.json").
+        // Normalise everything against the current working directory (which MSBuild
+        // sets to the project directory) so downstream path traversal is correct.
+        intermediateOutputPath = Path.GetFullPath(intermediateOutputPath);
+        projectAssetsFile = projectAssetsFile is not null
+            ? Path.GetFullPath(projectAssetsFile)
+            : null;
+
         var intermediateDir = Path.Combine(intermediateOutputPath, "switchyard");
         Directory.CreateDirectory(intermediateDir);
 
@@ -215,11 +223,20 @@ public sealed class SwitchyardPipeline
         foreach (var callerPath in callerPaths.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (!File.Exists(callerPath))
+            {
+                continue;
+            }
+
+            // Skip native DLLs, XML documentation files, and other non-PE
+            // entries that MSBuild may have placed in ReferenceCopyLocalPaths.
+            if (!IsManagedAssembly(callerPath))
                 continue;
 
             var callerName = DetermineCallerName(callerPath);
             if (callerName is null)
                 continue;
+
+            System.Diagnostics.Debug.WriteLine($"Switchyard: examining caller {callerName} at {callerPath}");
 
             var redirections = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var cfg in configurations)
@@ -236,10 +253,16 @@ public sealed class SwitchyardPipeline
             }
 
             if (redirections.Count == 0)
+            {
+                System.Diagnostics.Debug.WriteLine($"Switchyard: no redirections for {callerName}");
                 continue;
+            }
 
             if (!ReferenceRedirector.ReferencesAnyPackage(callerPath, allPackageNames))
+            {
+                System.Diagnostics.Debug.WriteLine($"Switchyard: {callerName} does not reference any routed package");
                 continue;
+            }
 
             var callerFileName = Path.GetFileName(callerPath);
             var outPath = Path.Combine(_intermediateDir, callerFileName);
@@ -316,4 +339,39 @@ public sealed class SwitchyardPipeline
 
     private static string RoutedKey(string packageId, string version)
         => packageId + "/" + version;
+
+    private static bool IsManagedAssembly(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return false;
+            using var fs = File.OpenRead(path);
+            using var br = new BinaryReader(fs);
+            if (fs.Length < 0x40)
+                return false;
+            fs.Position = 0x3C;
+            int peOffset = br.ReadInt32();
+            if (peOffset < 0 || peOffset + 4 > fs.Length)
+                return false;
+            fs.Position = peOffset;
+            uint peHeader = br.ReadUInt32();
+            if (peHeader != 0x00004550) // "PE\0\0"
+                return false;
+            fs.Position = peOffset + 24;
+            ushort magic = br.ReadUInt16();
+            int dataDirectoryOffset = magic == 0x10b
+                ? peOffset + 24 + 96
+                : peOffset + 24 + 112;
+            if (dataDirectoryOffset + 8 > fs.Length)
+                return false;
+            fs.Position = dataDirectoryOffset + 14 * 8;
+            int clrRva = br.ReadInt32();
+            return clrRva != 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 }

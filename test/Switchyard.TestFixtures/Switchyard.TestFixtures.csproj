@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <!-- This is a fixture library (produces a DLL + portable PDB consumed by
+         PdbAlignmentTests), NOT a runnable test project. Keep IsTestProject
+         false so `dotnet test` does not try to launch a testhost for it. -->
+    <IsTestProject>false</IsTestProject>
+    <AssemblyName>Switchyard.TestFixtures</AssemblyName>
+    <RootNamespace>Switchyard.TestFixtures</RootNamespace>
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+
+</Project>
