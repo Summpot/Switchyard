@@ -624,6 +624,12 @@ public sealed class SwitchyardPipeline
     /// declared dependency at its declared version. A dependency is treated as a
     /// native-asset provider when it actually contains a
     /// <c>runtimes/{rid}/native/</c> folder.</item>
+    /// <item>Any package already visible in the NuGet package folder that
+    /// carries a current-RID native file whose basename matches one of the
+    /// routed assembly's <c>DllImport</c> module names. Some packages do not
+    /// list every platform-native provider in the main nuspec, so Switchyard
+    /// discovers providers by the native files they actually contain rather
+    /// than by package naming conventions.</item>
     /// </list>
     /// The .NET runtime does NOT add a <c>lib</c> prefix when resolving a
     /// DllImport, so the import name must already match the on-disk file basename
@@ -669,6 +675,12 @@ public sealed class SwitchyardPipeline
         }
 
         foreach (var depDir in ResolveNativeAssetDirs(packageDir, rid))
+        {
+            if (seenDirs.Add(depDir))
+                nativeDirs.Add(depDir);
+        }
+
+        foreach (var depDir in ResolveNativeProviderAssetDirs(version, rid, pinvokeNames))
         {
             if (seenDirs.Add(depDir))
                 nativeDirs.Add(depDir);
@@ -859,7 +871,7 @@ public sealed class SwitchyardPipeline
     /// </summary>
     private IEnumerable<string> ResolveNativeAssetDirs(string packageDir, string rid)
     {
-        string packageId = Path.GetFileName(packageDir); // global cache folder is the id
+        string packageId = GetPackageIdFromPackageDir(packageDir);
         string nuspecPath = Path.Combine(packageDir, packageId.ToLowerInvariant() + ".nuspec");
         if (!File.Exists(nuspecPath))
         {
@@ -901,6 +913,86 @@ public sealed class SwitchyardPipeline
             if (Directory.Exists(depNativeDir))
                 yield return depNativeDir;
         }
+    }
+
+    /// <summary>
+    /// Resolves packages that provide the native module names imported by the
+    /// routed managed assembly. NuGet packages are inconsistent here: some list
+    /// every native provider in the main nuspec, while others rely on
+    /// platform-specific package references or targets. Rather than hard-code
+    /// package naming conventions, discover provider package ids by scanning
+    /// the package folder for current-RID native files whose basenames match the
+    /// assembly's <c>DllImport</c> module names, then resolve those same package
+    /// ids at the routed version.
+    /// </summary>
+    private IEnumerable<string> ResolveNativeProviderAssetDirs(
+        string version,
+        string rid,
+        ISet<string> pinvokeNames)
+    {
+        foreach (var nativePackageId in DiscoverNativeProviderPackageIds(rid, pinvokeNames))
+        {
+            string depDir;
+            try
+            {
+                depDir = _resolver.EnsurePackageAvailableAsync(nativePackageId, version).GetAwaiter().GetResult();
+            }
+            catch
+            {
+                continue;
+            }
+
+            var depNativeDir = Path.Combine(depDir, "runtimes", rid, "native");
+            if (Directory.Exists(depNativeDir))
+                yield return depNativeDir;
+        }
+    }
+
+    private IEnumerable<string> DiscoverNativeProviderPackageIds(
+        string rid,
+        ISet<string> pinvokeNames)
+    {
+        var globalPackagesFolder = _resolver.GlobalPackagesFolder;
+        if (!Directory.Exists(globalPackagesFolder))
+            yield break;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var packageRoot in Directory.EnumerateDirectories(globalPackagesFolder))
+        {
+            var packageId = Path.GetFileName(packageRoot);
+            if (string.IsNullOrWhiteSpace(packageId) || !seen.Add(packageId))
+                continue;
+
+            if (ProvidesAnyNativeModule(packageRoot, rid, pinvokeNames))
+                yield return packageId;
+        }
+    }
+
+    private static bool ProvidesAnyNativeModule(
+        string packageRoot,
+        string rid,
+        ISet<string> pinvokeNames)
+    {
+        foreach (var versionDir in Directory.EnumerateDirectories(packageRoot))
+        {
+            var nativeDir = Path.Combine(versionDir, "runtimes", rid, "native");
+            if (!Directory.Exists(nativeDir))
+                continue;
+
+            foreach (var nativeFile in Directory.EnumerateFiles(nativeDir))
+            {
+                if (pinvokeNames.Contains(Path.GetFileNameWithoutExtension(nativeFile)))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private static string GetPackageIdFromPackageDir(string packageDir)
+    {
+        // Global packages are laid out as {root}/{packageId}/{version}. The
+        // resolver hands us the version directory, so the id is its parent name.
+        return Directory.GetParent(packageDir)?.Name ?? Path.GetFileName(packageDir);
     }
 
     /// <summary>
