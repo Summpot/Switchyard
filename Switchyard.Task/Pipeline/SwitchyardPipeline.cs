@@ -244,7 +244,60 @@ public sealed class SwitchyardPipeline
                     true,
                     nativePaths,
                     assemblyVersion));
+            }
+        }
 
+        // Decide whether the original (un-routed) package DLL must be kept. It
+        // is the binding target for any NON-original-DLL caller that REFERENCES
+        // the routed package but has no matching rule (or matches the original
+        // version) — e.g. a transitive dependency like Avalonia.Skia that
+        // references SkiaSharp but was never added to the route table.
+        //
+        // Callers that are themselves the original DLL of ANY routed package
+        // are EXCLUDED from this analysis: those original assemblies are either
+        // removed (no caller uses them) or routed, so they never load in their
+        // original form and their references to other routed packages must not
+        // keep those packages' originals alive (otherwise RouteGroup cascade
+        // graphs could never strip originals).
+        var routedPackageIds = new HashSet<string>(
+            configurations.Select(c => c.PackageId),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var cfg in configurations)
+        {
+            bool anyUsesOriginal = false;
+            foreach (var callerPath in callerPaths)
+            {
+                if (!File.Exists(callerPath) || !IsManagedAssembly(callerPath))
+                    continue;
+
+                // Skip callers that are the original DLL of any routed package —
+                // they are removed or routed, never loaded as the original.
+                if (routedPackageIds.Contains(
+                        Path.GetFileNameWithoutExtension(callerPath)))
+                    continue;
+
+                var callerName = DetermineCallerName(callerPath);
+                if (callerName is null)
+                    continue;
+
+                // Skip callers that don't reference this routed package at all —
+                // they cannot bind to either the original or a routed version.
+                if (!ReferenceRedirector.ReferencesAnyPackage(callerPath, new[] { cfg.PackageId }))
+                    continue;
+
+                var resolved = cfg.ResolveVersionForCaller(callerName);
+                // resolved == null means "no rule matched, no wildcard" -> the
+                // caller falls back to the original version. resolved ==
+                // OriginalVersion also uses it.
+                if (resolved is null || cfg.IsOriginalVersion(resolved))
+                {
+                    anyUsesOriginal = true;
+                    break;
+                }
+            }
+
+            if (!anyUsesOriginal)
+            {
                 var originalDll = FindOriginalCopyLocalDll(callerPaths, cfg.PackageId);
                 if (originalDll is not null)
                     removedOriginals.Add(originalDll);

@@ -53,6 +53,8 @@
               ItemName="SwitchyardRoutedAssemblies" />
       <Output TaskParameter="NewRemovedOriginalNativePaths"
               ItemName="SwitchyardRemovedOriginalNativePaths" />
+      <Output TaskParameter="NewStrippedOriginalPackageIds"
+              ItemName="SwitchyardStrippedOriginalPackageIds" />
     </SwitchyardTask>
 
     <ItemGroup>
@@ -82,6 +84,7 @@
     <SwitchyardDepsPatcherTask
         DepsFilePath="$(ProjectDepsFilePath)"
         RoutedAssemblies="@(SwitchyardRoutedAssemblies)"
+        StrippedOriginalPackageIds="@(SwitchyardStrippedOriginalPackageIds)"
         Silent="$(SwitchyardSilent)" />
 
   </Target>

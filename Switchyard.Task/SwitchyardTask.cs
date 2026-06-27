@@ -104,6 +104,17 @@ public sealed class SwitchyardTask : Task
     [Output]
     public ITaskItem[]? NewRemovedOriginalNativePaths { get; set; }
 
+    /// <summary>
+    /// The package ids whose original (un-routed) DLL was removed from the
+    /// copy-local output because every caller is routed away from it. Consumed
+    /// by the deps.json patcher so it strips those packages' runtime entries
+    /// (and only those — packages whose original is still bound by unrouted
+    /// callers, e.g. SkiaSharp 2.88.9 used by Avalonia.Skia, keep their runtime
+    /// entry so the unrouted callers can still bind at runtime).
+    /// </summary>
+    [Output]
+    public ITaskItem[]? NewStrippedOriginalPackageIds { get; set; }
+
     public override bool Execute()
     {
         var configurations = ConfigurationParser.Parse(PackageReferences);
@@ -166,6 +177,13 @@ public sealed class SwitchyardTask : Task
             NewRoutedAssemblies = BuildRoutedAssemblyItems(result);
             NewRemovedOriginalNativePaths = result.RemovedOriginalNativePaths
                 .Select(p => new TaskItem(p))
+                .ToArray();
+            // Derive the package ids whose original DLL was removed — those are
+            // the ones the deps.json patcher may strip the runtime entry for.
+            NewStrippedOriginalPackageIds = result.RemovedOriginalPaths
+                .Select(p => Path.GetFileNameWithoutExtension(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(id => new TaskItem(id))
                 .ToArray();
 
             // deps.json is patched by the separate PatchSwitchyardDepsJson target,

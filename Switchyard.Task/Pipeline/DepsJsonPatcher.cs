@@ -47,14 +47,15 @@ public static class DepsJsonPatcher
     /// Returns the number of entries added, or <c>-1</c> when the file could
     /// not be read or parsed.
     /// </summary>
-    public static int AddRoutedAssemblies(string depsFilePath, IEnumerable<PreparedAssembly> routedAssemblies)
+    public static int AddRoutedAssemblies(string depsFilePath, IEnumerable<PreparedAssembly> routedAssemblies, IReadOnlyCollection<string>? stripOriginalRuntimePackageIds = null)
     {
         return AddRoutedAssemblies(depsFilePath,
             routedAssemblies.Where(a => a.IsRouted)
                             .Select(a => (RoutedName: Path.GetFileNameWithoutExtension(a.DllPath),
                                           Version: a.Version,
                                           FileName: Path.GetFileName(a.DllPath),
-                                          AssemblyVersion: a.AssemblyVersion ?? a.Version)));
+                                          AssemblyVersion: a.AssemblyVersion ?? a.Version)),
+            stripOriginalRuntimePackageIds);
     }
 
     /// <summary>
@@ -70,9 +71,18 @@ public static class DepsJsonPatcher
     /// so the CLR binds the routed assembly by <c>(Name, Version)</c> — this
     /// may differ from the package version, e.g. SkiaSharp 2.88.9 has
     /// <c>AssemblyVersion</c> 2.88.0.0).</param>
+    /// <param name="stripOriginalRuntimePackageIds">The original package ids whose
+    /// <c>runtime</c> member in deps.json should be removed (so the SDK's publish
+    /// flow does not copy the original DLL back and the original drops out of
+    /// the TPA list). Pass only ids whose original DLL is genuinely unused by
+    /// any caller (e.g. TargetLib when every caller is routed away from it).
+    /// Omit ids whose original is still bound by unrouted callers (e.g. SkiaSharp
+    /// 2.88.9 still used by Avalonia.Skia) — stripping those would break the
+    /// unrouted callers' runtime binding. May be <c>null</c>.</param>
     public static int AddRoutedAssemblies(
         string depsFilePath,
-        IEnumerable<(string RoutedName, string Version, string FileName, string AssemblyVersion)> routedAssemblies)
+        IEnumerable<(string RoutedName, string Version, string FileName, string AssemblyVersion)> routedAssemblies,
+        IReadOnlyCollection<string>? stripOriginalRuntimePackageIds = null)
     {
         if (!File.Exists(depsFilePath))
             return -1;
@@ -112,22 +122,20 @@ public static class DepsJsonPatcher
         if (runtimeTargetName.Length == 0 || !targets.TryGetPropertyValue(runtimeTargetName, out var targetNode) || targetNode is not JsonObject targetFrame)
             return -1;
 
-        // Collect the original package ids (e.g. "TargetLib") for every
-        // routed assembly so we can neutralise the original package's runtime
-        // entry. The SDK's publish flow copies every runtime asset listed in
-        // deps.json — including the original "TargetLib/2.0.0" entry which
-        // resolves to the NuGet cache copy of TargetLib.dll. If left in place,
-        // the original DLL reappears in the publish directory despite having
-        // been removed from ReferenceCopyLocalPaths. Clearing the original
-        // entry's "runtime" member (while keeping the library/target node so
-        // dependency edges stay valid) prevents that copy and also drops the
-        // original from the TPA list.
+        // Collect the original package ids whose runtime entry should be
+        // neutralised. This is driven by the caller (the set of ids whose
+        // original DLL is genuinely unused), NOT by every routed assembly —
+        // because an original may still be bound by unrouted callers (e.g.
+        // SkiaSharp 2.88.9 used by Avalonia.Skia) and stripping its runtime
+        // would break that binding.
         var originalPackageIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (routedName, _, _, _) in routed)
+        if (stripOriginalRuntimePackageIds is not null)
         {
-            string? originalId = StripRoutedSuffix(routedName);
-            if (originalId is not null)
-                originalPackageIds.Add(originalId);
+            foreach (var id in stripOriginalRuntimePackageIds)
+            {
+                if (!string.IsNullOrWhiteSpace(id))
+                    originalPackageIds.Add(id);
+            }
         }
 
         foreach (var (routedName, version, fileName, assemblyVersionRaw) in routed)

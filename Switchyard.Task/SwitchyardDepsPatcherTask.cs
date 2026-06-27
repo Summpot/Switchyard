@@ -30,6 +30,16 @@ public sealed class SwitchyardDepsPatcherTask : Task
     [Required]
     public ITaskItem[]? RoutedAssemblies { get; set; }
 
+    /// <summary>
+    /// The package ids whose original DLL was removed from the copy-local
+    /// output (because every caller is routed away from it). The deps.json
+    /// patcher strips those packages' runtime entries. Omit ids whose original
+    /// is still bound by unrouted callers (e.g. SkiaSharp 2.88.9 used by
+    /// Avalonia.Skia) — stripping those would break the unrouted callers'
+    /// runtime binding.
+    /// </summary>
+    public ITaskItem[]? StrippedOriginalPackageIds { get; set; }
+
     public bool Silent { get; set; }
 
     public override bool Execute()
@@ -49,7 +59,12 @@ public sealed class SwitchyardDepsPatcherTask : Task
         if (tuples.Count == 0)
             return true;
 
-        int result = DepsJsonPatcher.AddRoutedAssemblies(DepsFilePath!, tuples);
+        var stripIds = StrippedOriginalPackageIds?
+            .Select(i => i.ItemSpec)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToList();
+
+        int result = DepsJsonPatcher.AddRoutedAssemblies(DepsFilePath!, tuples, stripIds);
         if (!Silent)
             Log.LogMessage(MessageImportance.High,
                 $"Switchyard: deps.json patch result={result} (path={DepsFilePath}, routed={tuples.Count}).");

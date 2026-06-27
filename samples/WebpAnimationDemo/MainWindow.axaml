@@ -1,0 +1,17 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="WebpAnimationDemo.MainWindow"
+        WindowStartupLocation="CenterScreen">
+
+  <Grid RowDefinitions="Auto,*,Auto" Margin="16">
+    <TextBlock Grid.Row="0" FontSize="16" FontWeight="Bold"
+               Text="Animated WebP via SkiaSharp 4.147.0-preview + Avalonia on 2.88.9" />
+    <Image Grid.Row="1" Name="Preview" Stretch="Uniform" Margin="0,12" />
+    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12">
+      <Button Name="EncodeButton" Click="OnEncodeClick">Encode WebP</Button>
+      <Button Click="OnOpenClick">Open Output Folder</Button>
+      <TextBlock Name="Status" VerticalAlignment="Center" />
+    </StackPanel>
+  </Grid>
+
+</Window>
