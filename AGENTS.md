@@ -392,7 +392,6 @@ Before submitting a change, verify:
       have re-derived the hook points from the architecture section above.
 - [ ] If you changed the weaver, the Level 1 tests still pass and you added a
       new one for the new behaviour.
-      new one for the new behaviour.
 - [ ] If you changed the deps.json patcher or publish filter, the Level 3
       runtime tests still pass (they exercise the TPA list end-to-end).
 - [ ] XML doc comments and inline design context are updated to reflect
