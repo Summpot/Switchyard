@@ -38,17 +38,6 @@ jobs:
       - name: Display dotnet info
         run: dotnet --info
 
-      # ---------------------------------------------------------------------------
-      # Native build toolchain for the NativeBindingLib fixture (the Avalonia +
-      # higher-SkiaSharp-style scenario). On Windows the MSVC dev environment
-      # is initialised so cl.exe is on PATH; on Linux gcc is preinstalled on
-      # the ubuntu runner. The fixture itself is built at test time by
-      # BuildUtility from test/fixtures/NativeBindingLib/native.c.
-      # ---------------------------------------------------------------------------
-      - name: Setup MSVC dev environment (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
       - name: Verify native compiler
         shell: pwsh
         run: |
