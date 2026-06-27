@@ -53,7 +53,14 @@ jobs:
       - name: Purge test stub packages from global NuGet cache
         shell: pwsh
         run: |
-          $pkgRoot = Join-Path $env:USERPROFILE '.nuget' 'packages'
+          $pkgRoot = $env:NUGET_PACKAGES
+          if ([string]::IsNullOrWhiteSpace($pkgRoot)) {
+            $homeDir = if (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { $env:USERPROFILE }
+            if ([string]::IsNullOrWhiteSpace($homeDir)) {
+              throw "Could not determine the NuGet global packages folder: NUGET_PACKAGES, HOME, and USERPROFILE are all unset."
+            }
+            $pkgRoot = Join-Path $homeDir '.nuget' 'packages'
+          }
           foreach ($id in 'switchyard','targetlib','commonutils','nativebindinglib') {
             $p = Join-Path $pkgRoot $id
             if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }

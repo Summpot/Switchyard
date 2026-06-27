@@ -8,8 +8,16 @@ namespace Switchyard.IntegrationTests;
 /// feed, but this test keeps the package contract explicit: restore the nupkg,
 /// import its build assets, load the task DLL, and run the weaving pipeline.
 /// </summary>
+[Collection("Integration")]
 public class PackageSmokeTests
 {
+    private readonly LocalFeedFixture _fixture;
+
+    public PackageSmokeTests(LocalFeedFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
     [Fact]
     public void PackedNugetPackage_RestoresAndRunsTargets_FromCleanProject()
     {
