@@ -7,11 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup Condition="'$(SwitchyardEnabled)' == 'true' And '$(SwitchyardTaskAssembly)' == ''">
-    <_SwitchyardTaskAssemblyCandidate Include="$(SwitchyardTaskAssemblyDir)*\Switchyard.Task.dll" />
-    <_SwitchyardFrameworkTaskAssemblyCandidate Include="@(_SwitchyardTaskAssemblyCandidate)"
-                                               Condition="'$([System.Text.RegularExpressions.Regex]::IsMatch('%(_SwitchyardTaskAssemblyCandidate.Identity)', '[\\/]net4[0-9]+[\\/]Switchyard\.Task\.dll$'))' == 'true'" />
-    <_SwitchyardCoreTaskAssemblyCandidate Include="@(_SwitchyardTaskAssemblyCandidate)"
-                                          Condition="'$([System.Text.RegularExpressions.Regex]::IsMatch('%(_SwitchyardTaskAssemblyCandidate.Identity)', '[\\/]net4[0-9]+[\\/]Switchyard\.Task\.dll$'))' != 'true'" />
+    <_SwitchyardFrameworkTaskAssemblyCandidate Include="$(SwitchyardTaskAssemblyDir)net4*\Switchyard.Task.dll" />
+    <_SwitchyardCoreTaskAssemblyCandidate Include="$(SwitchyardTaskAssemblyDir)*\Switchyard.Task.dll"
+                                          Exclude="$(SwitchyardTaskAssemblyDir)net4*\Switchyard.Task.dll" />
   </ItemGroup>
 
   <PropertyGroup Condition="'$(SwitchyardEnabled)' == 'true' And '$(SwitchyardTaskAssembly)' == ''">

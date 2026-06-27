@@ -94,10 +94,16 @@ jobs:
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          dotnet nuget push "${{ runner.temp }}/nupkgs/*.nupkg" `
-            --api-key "$env:NUGET_API_KEY" `
-            --source https://api.nuget.org/v3/index.json `
-            --skip-duplicate
+          $packages = Get-ChildItem -Path "${{ runner.temp }}/nupkgs" -Filter '*.nupkg' -File
+          if ($packages.Count -eq 0) {
+            throw "No NuGet packages found in ${{ runner.temp }}/nupkgs."
+          }
+          foreach ($package in $packages) {
+            dotnet nuget push $package.FullName `
+              --api-key "$env:NUGET_API_KEY" `
+              --source https://api.nuget.org/v3/index.json `
+              --skip-duplicate
+          }
         shell: pwsh
 
       # ---------------------------------------------------------------------------
@@ -115,7 +121,13 @@ jobs:
         run: |
           $owner = $env:GITHUB_REPOSITORY.Split('/')[0].ToLowerInvariant()
           $source = "https://nuget.pkg.github.com/$owner/index.json"
-          dotnet nuget push "${{ runner.temp }}/nupkgs/*.nupkg" `
-            --api-key "$env:GH_TOKEN" `
-            --source "$source" `
-            --skip-duplicate
+          $packages = Get-ChildItem -Path "${{ runner.temp }}/nupkgs" -Filter '*.nupkg' -File
+          if ($packages.Count -eq 0) {
+            throw "No NuGet packages found in ${{ runner.temp }}/nupkgs."
+          }
+          foreach ($package in $packages) {
+            dotnet nuget push $package.FullName `
+              --api-key "$env:GH_TOKEN" `
+              --source "$source" `
+              --skip-duplicate
+          }
