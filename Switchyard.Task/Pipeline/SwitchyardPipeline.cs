@@ -4,6 +4,7 @@ using Switchyard.Weaver;
 using System.Runtime.InteropServices;
 using AsmResolver.DotNet;
 using AsmResolver.DotNet.Serialized;
+using System.Diagnostics;
 
 namespace Switchyard.Pipeline;
 
@@ -175,19 +176,22 @@ public sealed class SwitchyardPipeline
     private readonly AssetsFileParser? _assets;
     private readonly PackageResolver _resolver;
     private readonly string _assemblyName;
+    private readonly string _nativeAotDirectPInvokeMode;
 
     private SwitchyardPipeline(
         string intermediateDir,
         string targetFramework,
         AssetsFileParser? assets,
         PackageResolver resolver,
-        string assemblyName)
+        string assemblyName,
+        string? nativeAotDirectPInvokeMode)
     {
         _intermediateDir = intermediateDir;
         _targetFramework = targetFramework;
         _assets = assets;
         _resolver = resolver;
         _assemblyName = assemblyName;
+        _nativeAotDirectPInvokeMode = nativeAotDirectPInvokeMode ?? string.Empty;
     }
 
     /// <summary>
@@ -197,7 +201,8 @@ public sealed class SwitchyardPipeline
         string intermediateOutputPath,
         string targetFramework,
         string? projectAssetsFile,
-        string assemblyName)
+        string assemblyName,
+        string? nativeAotDirectPInvokeMode = null)
     {
         // MSBuild frequently passes relative paths (e.g. "obj\project.assets.json").
         // Normalise everything against the current working directory (which MSBuild
@@ -220,7 +225,7 @@ public sealed class SwitchyardPipeline
         var nugetConfig = FindNuGetConfig(Path.GetDirectoryName(projectAssetsFile) ?? intermediateOutputPath);
         var resolver = PackageResolver.Create(globalPackagesFolder, nugetConfig);
 
-        return new SwitchyardPipeline(intermediateDir, targetFramework, assets, resolver, assemblyName);
+        return new SwitchyardPipeline(intermediateDir, targetFramework, assets, resolver, assemblyName, nativeAotDirectPInvokeMode);
     }
 
     /// <summary>
@@ -241,7 +246,8 @@ public sealed class SwitchyardPipeline
         var groups = ConfigurationParser.BuildGroups(configurations);
         var prepared = new List<PreparedAssembly>();
         var removedOriginals = new List<string>();
-        var removedOriginalNatives = new List<string>();
+        var removedOriginalPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var removedOriginalNativesByPackage = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
         var packageToRoutedName = new Dictionary<string, string>(StringComparer.Ordinal);
         // original native lib name -> routed native lib name, for the version a
@@ -286,7 +292,9 @@ public sealed class SwitchyardPipeline
                 // version-specific native lib instead of a single shared one.
                 var nativeLibraries = PrepareNativeLibraries(
                     packageDir, routedName, version, outDll,
-                    nativeRedirectionsByRoutedName, removedOriginalNatives, callerPaths);
+                    nativeRedirectionsByRoutedName,
+                    GetOrCreateNativeRemovalBucket(removedOriginalNativesByPackage, cfg.PackageId),
+                    callerPaths);
 
                 var outPdb = Path.ChangeExtension(outDll, ".pdb");
                 prepared.Add(new PreparedAssembly(
@@ -318,9 +326,18 @@ public sealed class SwitchyardPipeline
             StringComparer.OrdinalIgnoreCase);
         foreach (var cfg in configurations)
         {
-            bool anyUsesOriginal = false;
+            bool anyUsesOriginal = cfg.ResolveVersionForCaller(_assemblyName) is { } projectVersion
+                && cfg.IsOriginalVersion(projectVersion);
+            if (!anyUsesOriginal)
+            {
+                anyUsesOriginal = cfg.Routes.Any(route =>
+                    !route.IsWildcard && cfg.IsOriginalVersion(route.Version));
+            }
             foreach (var callerPath in callerPaths)
             {
+                if (anyUsesOriginal)
+                    break;
+
                 if (!File.Exists(callerPath) || !IsManagedAssembly(callerPath))
                     continue;
 
@@ -354,7 +371,10 @@ public sealed class SwitchyardPipeline
             {
                 var originalDll = FindOriginalCopyLocalDll(callerPaths, cfg.PackageId);
                 if (originalDll is not null)
+                {
                     removedOriginals.Add(originalDll);
+                    removedOriginalPackageIds.Add(cfg.PackageId);
+                }
             }
         }
 
@@ -494,7 +514,24 @@ public sealed class SwitchyardPipeline
             prepared,
             redirectedCallers,
             removedOriginals.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
-            removedOriginalNatives.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+            removedOriginalPackageIds
+                .SelectMany(id => removedOriginalNativesByPackage.TryGetValue(id, out var paths)
+                    ? paths
+                    : Enumerable.Empty<string>())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList());
+    }
+
+    private static List<string> GetOrCreateNativeRemovalBucket(
+        Dictionary<string, List<string>> removedOriginalNativesByPackage,
+        string packageId)
+    {
+        if (!removedOriginalNativesByPackage.TryGetValue(packageId, out var bucket))
+        {
+            bucket = new List<string>();
+            removedOriginalNativesByPackage[packageId] = bucket;
+        }
+        return bucket;
     }
 
     private string? ResolvePackageDll(string packageId, string version)
@@ -630,9 +667,26 @@ public sealed class SwitchyardPipeline
                 File.Copy(nativeFile, outNative, overwrite: true);
 
                 var entryPoints = pinvokeEntryPointsByModule.TryGetValue(dllImportName, out var names)
-                    ? names
+                    ? names.ToArray()
                     : Array.Empty<string>();
-                nativeLibraries.Add(new PreparedNativeLibrary(outNative, routedBase, entryPoints, null));
+                string? linkerPath = null;
+                IReadOnlyCollection<string> routedEntryPoints = entryPoints;
+
+                if (ShouldPrefixNativeSymbols()
+                    && entryPoints.Length > 0
+                    && TryPrefixNativeSymbols(outNative, routedBase, entryPoints, out linkerPath, out var prefixedEntryPoints))
+                {
+                    routedEntryPoints = prefixedEntryPoints;
+                    ReferenceRedirector.RewritePInvokeEntryPoints(
+                        managedDllPath,
+                        dllImportName,
+                        entryPoints.ToDictionary(
+                            e => e,
+                            e => GetPrefixedEntryPointName(BuildNativeSymbolPrefix(routedBase), e),
+                            StringComparer.Ordinal));
+                }
+
+                nativeLibraries.Add(new PreparedNativeLibrary(outNative, routedBase, routedEntryPoints, linkerPath));
 
                 nativeMap[dllImportName] = routedBase;
 
@@ -658,6 +712,101 @@ public sealed class SwitchyardPipeline
         RewritePInvokeInPlace(managedDllPath, nativeMap);
 
         return nativeLibraries;
+    }
+
+    private bool ShouldPrefixNativeSymbols()
+    {
+        return string.Equals(_nativeAotDirectPInvokeMode, "PrefixSymbols", StringComparison.OrdinalIgnoreCase)
+            && !RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+    }
+
+    private bool TryPrefixNativeSymbols(
+        string nativePath,
+        string routedModuleName,
+        IReadOnlyCollection<string> entryPoints,
+        out string? linkerPath,
+        out IReadOnlyCollection<string> prefixedEntryPoints)
+    {
+        linkerPath = null;
+        prefixedEntryPoints = Array.Empty<string>();
+
+        if (entryPoints.Count == 0)
+            return false;
+
+        var objcopy = FindTool("objcopy");
+        if (objcopy is null)
+            return false;
+
+        var prefix = BuildNativeSymbolPrefix(routedModuleName);
+        var prefixedPath = Path.Combine(
+            _intermediateDir,
+            Path.GetFileNameWithoutExtension(nativePath) + ".prefixed" + Path.GetExtension(nativePath));
+        File.Copy(nativePath, prefixedPath, overwrite: true);
+
+        var result = RunTool(objcopy, $"--prefix-symbols={prefix} \"{prefixedPath}\"");
+        if (result != 0)
+        {
+            try { File.Delete(prefixedPath); } catch { }
+            return false;
+        }
+
+        File.Copy(prefixedPath, nativePath, overwrite: true);
+        try { File.Delete(prefixedPath); } catch { }
+
+        linkerPath = nativePath;
+        prefixedEntryPoints = entryPoints
+            .Select(e => GetPrefixedEntryPointName(prefix, e))
+            .ToArray();
+        return true;
+    }
+
+    private static string BuildNativeSymbolPrefix(string routedModuleName)
+    {
+        var chars = routedModuleName.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray();
+        return "switchyard_" + new string(chars) + "_";
+    }
+
+    private static string GetPrefixedEntryPointName(string prefix, string entryPoint)
+    {
+        return prefix + entryPoint;
+    }
+
+    private static string? FindTool(string toolName)
+    {
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        foreach (var dir in path.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir))
+                continue;
+
+            var candidate = Path.Combine(dir, toolName);
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        return null;
+    }
+
+    private static int RunTool(string fileName, string arguments)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = arguments,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+
+        using var process = Process.Start(psi);
+        if (process is null)
+            return -1;
+        process.WaitForExit();
+        return process.ExitCode;
     }
 
     /// <summary>

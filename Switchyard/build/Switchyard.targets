@@ -47,6 +47,7 @@
         TargetFramework="$(SwitchyardTargetFramework)"
         AssemblyName="$(AssemblyName)"
         IntermediateAssembly="@(IntermediateAssembly)"
+        NativeAotDirectPInvokeMode="$(SwitchyardNativeAotDirectPInvokeMode)"
         Silent="$(SwitchyardSilent)">
 
       <Output TaskParameter="NewReferenceCopyLocalPaths"
@@ -122,6 +123,13 @@
       <IlcCompileInput Include="@(ManagedBinary)"
                        Condition="'$(SwitchyardNewIntermediateAssemblyPath)' != ''" />
 
+      <_SwitchyardOriginalRoutedPackageReference
+          Include="$(OutDir)%(SwitchyardRoutedAssemblies.Identity).dll"
+          Condition="'@(SwitchyardRoutedAssemblies)' != ''
+                     And !Exists('$(IntermediateOutputPath)switchyard\%(SwitchyardRoutedAssemblies.Identity).Switchyard.%(SwitchyardRoutedAssemblies.RoutedVersion).dll')
+                     And Exists('$(OutDir)%(SwitchyardRoutedAssemblies.Identity).dll')" />
+      <IlcReference Include="@(_SwitchyardOriginalRoutedPackageReference)" />
+
       <_SwitchyardNativeAotModule Include="@(_SwitchyardSafeDirectPInvokeLibraries->'%(ModuleName)')"
                                   Condition="'%(_SwitchyardSafeDirectPInvokeLibraries.ModuleName)' != ''" />
       <_SwitchyardNativeAotLinkerInput Include="@(_SwitchyardSafeDirectPInvokeLibraries->'%(LinkerPath)')"
@@ -169,22 +177,24 @@
     native libraries (e.g. libskiasharp.dll) into the publish file stream
     even though the build phase removed them from @(ReferenceCopyLocalPaths).
     This target runs right before the publish asset list is finalised and
-    strips the original package DLLs (by package id) and the original native
-    libraries (by file name) back out of both @(ReferenceCopyLocalPaths) and
-    @(_ResolvedCopyLocalPublishAssets) so only the routed (renamed) assemblies
-    and their renamed native libraries reach the publish directory.
+    strips only the original package DLLs that Phase 1 proved are unused (by
+    package id), plus the original native libraries (by file name), back out of
+    both @(ReferenceCopyLocalPaths) and @(_ResolvedCopyLocalPublishAssets). An
+    original package version that is still the binding target for some caller
+    must remain available, e.g. the app itself using SkiaSharp 4.x while
+    Avalonia is routed to SkiaSharp 2.x.
   -->
   <Target Name="SwitchyardPublishCleanup"
           BeforeTargets="_ComputeResolvedCopyLocalPublishAssets"
           Condition="'$(SwitchyardEnabled)' == 'true' And '@(SwitchyardRoutedAssemblies)' != ''">
 
     <SwitchyardPublishFilterTask CopyLocalItems="@(ReferenceCopyLocalPaths)"
-                                 RoutedAssemblies="@(SwitchyardRoutedAssemblies)"
+                                 RoutedAssemblies="@(SwitchyardStrippedOriginalPackageIds)"
                                  BlockedNativeFileNames="@(SwitchyardRemovedOriginalNativePaths)">
       <Output TaskParameter="FilteredItems" ItemName="_SwitchyardFilteredRefCopyLocal" />
     </SwitchyardPublishFilterTask>
     <SwitchyardPublishFilterTask CopyLocalItems="@(_ResolvedCopyLocalPublishAssets)"
-                                 RoutedAssemblies="@(SwitchyardRoutedAssemblies)"
+                                 RoutedAssemblies="@(SwitchyardStrippedOriginalPackageIds)"
                                  BlockedNativeFileNames="@(SwitchyardRemovedOriginalNativePaths)">
       <Output TaskParameter="FilteredItems" ItemName="_SwitchyardFilteredPublishAssets" />
     </SwitchyardPublishFilterTask>
@@ -196,7 +206,7 @@
       <_ResolvedCopyLocalPublishAssets Include="@(_SwitchyardFilteredPublishAssets)" />
     </ItemGroup>
 
-    <Message Text="Switchyard: publish cleanup stripped original package DLLs for @(SwitchyardRoutedAssemblies->'%(Identity)', ' ')"
+    <Message Text="Switchyard: publish cleanup stripped original package DLLs for @(SwitchyardStrippedOriginalPackageIds->'%(Identity)', ' ')"
              Condition="'$(SwitchyardSilent)' != 'true'"
              Importance="high" />
   </Target>

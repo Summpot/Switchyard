@@ -8,15 +8,31 @@
     <AssemblyName>WebpAnimationDemo</AssemblyName>
     <IsPackable>false</IsPackable>
     <SwitchyardEnabled>true</SwitchyardEnabled>
-    <SelfContained>false</SelfContained>
+    <SelfContained>true</SelfContained>
+    <PublishAot>true</PublishAot>
+    <!-- Desktop SkiaSharp native assets ship dynamic libraries only; the static
+         libSkiaSharp.a packages are WebAssembly-specific. Keep this sample on
+         NativeAOT's dynamic DirectPInvoke/lazy PInvoke path. -->
+    <SwitchyardNativeAotDirectPInvokeMode>Dynamic</SwitchyardNativeAotDirectPInvokeMode>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">win-x64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('Linux'))">linux-x64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('OSX'))">osx-x64</RuntimeIdentifier>
   </PropertyGroup>
 
+  <Import Project="..\..\Switchyard\build\Switchyard.props" />
+
   <ItemGroup>
-    <PackageReference Include="Switchyard" Version="1.0.0" />
     <PackageReference Include="Avalonia" Version="11.3.18" />
     <PackageReference Include="Avalonia.Skia" Version="11.3.18" />
     <PackageReference Include="Avalonia.Desktop" Version="11.3.18" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.18" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Switchyard\Switchyard.csproj"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all"
+                      OutputItemType="_SwitchyardBuildOnlyReference" />
   </ItemGroup>
 
   <!--
@@ -39,5 +55,11 @@
       <SwitchyardRoutes>WebpAnimationDemo=4.148.0;*=2.88.9</SwitchyardRoutes>
     </PackageReference>
   </ItemGroup>
+
+  <PropertyGroup>
+    <SwitchyardTaskAssemblyDir>..\..\Switchyard.Task\bin\$(Configuration)\</SwitchyardTaskAssemblyDir>
+  </PropertyGroup>
+
+  <Import Project="..\..\Switchyard\build\Switchyard.targets" />
 
 </Project>

@@ -67,6 +67,14 @@ public sealed class SwitchyardTask : Task
     public ITaskItem? IntermediateAssembly { get; set; }
 
     /// <summary>
+    /// Controls NativeAOT direct P/Invoke handling for routed native libraries.
+    /// <c>PrefixSymbols</c> attempts to prefix native export symbols and rewrite
+    /// managed DllImport entry points so duplicate native symbols can be linked
+    /// directly. Any other value keeps the safe default lazy/direct filtering.
+    /// </summary>
+    public string? NativeAotDirectPInvokeMode { get; set; }
+
+    /// <summary>
     /// When set to <c>true</c>, suppresses all diagnostic output.
     /// </summary>
     public bool Silent { get; set; }
@@ -174,7 +182,8 @@ public sealed class SwitchyardTask : Task
                 IntermediateOutputPath!,
                 targetFramework,
                 ProjectAssetsFile,
-                assemblyName);
+                assemblyName,
+                NativeAotDirectPInvokeMode);
 
             var result = pipeline.Execute(configurations, callerPaths);
 

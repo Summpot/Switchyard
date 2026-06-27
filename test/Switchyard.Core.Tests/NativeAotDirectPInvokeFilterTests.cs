@@ -38,6 +38,20 @@ public class NativeAotDirectPInvokeFilterTests
         Assert.Empty(task.SafeDirectPInvokeLibraries!);
     }
 
+    [Fact]
+    public void Execute_KeepsPrefixedLibrariesWhoseEntryPointsBecomeUnique()
+    {
+        var first = Native("libsame.Switchyard.1.0.0", "switchyard_libsame_Switchyard_1_0_0_native_get_version");
+        var second = Native("libsame.Switchyard.3.5.0", "switchyard_libsame_Switchyard_3_5_0_native_get_version");
+        var task = new SwitchyardNativeAotDirectPInvokeFilterTask
+        {
+            RoutedNativeLibraries = new[] { first, second }
+        };
+
+        Assert.True(task.Execute());
+        Assert.Equal(2, task.SafeDirectPInvokeLibraries!.Length);
+    }
+
     private static TaskItem Native(string moduleName, string entryPointNames)
     {
         var item = new TaskItem(moduleName + ".dll");

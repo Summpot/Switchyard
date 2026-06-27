@@ -264,6 +264,53 @@ public static class ReferenceRedirector
     }
 
     /// <summary>
+    /// Rewrites P/Invoke entry point names for imports from a specific module.
+    /// Used by NativeAOT direct P/Invoke symbol-prefix mode: the native export
+    /// symbols are prefixed first, then the managed <c>ImplMap.Name</c> values
+    /// are updated to the matching prefixed names.
+    /// </summary>
+    public static void RewritePInvokeEntryPoints(
+        string assemblyPath,
+        string moduleName,
+        IReadOnlyDictionary<string, string> entryPointRedirections)
+    {
+        if (entryPointRedirections.Count == 0)
+            return;
+
+        var module = ReadModule(assemblyPath);
+        var changed = false;
+        foreach (var type in module.GetAllTypes())
+        {
+            foreach (var method in type.Methods)
+            {
+                var map = method.ImplementationMap;
+                var mapModuleName = map?.Scope?.Name?.Value?.ToString();
+                var rawEntryPoint = map?.Name?.Value?.ToString();
+                if (map is null
+                    || !string.Equals(mapModuleName, moduleName, StringComparison.Ordinal)
+                    || string.IsNullOrWhiteSpace(rawEntryPoint))
+                {
+                    continue;
+                }
+
+                var entryPoint = rawEntryPoint!;
+                if (!entryPointRedirections.TryGetValue(entryPoint, out var routedEntryPoint))
+                {
+                    continue;
+                }
+
+                map.Name = routedEntryPoint;
+                changed = true;
+            }
+        }
+
+        if (!changed)
+            return;
+
+        module.Write(assemblyPath);
+    }
+
+    /// <summary>
     /// Extracts the version component embedded in a routed assembly name of
     /// the form <c>{Package}.Switchyard.{version}</c> (e.g.
     /// <c>TargetLib.Switchyard.1.0.0</c> → <c>1.0.0</c>). Returns <c>null</c>

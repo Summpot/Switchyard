@@ -11,7 +11,7 @@ namespace Switchyard;
 /// resurrects the original <c>{PackageId}.dll</c> entries even after the
 /// build phase stripped them from <c>@(ReferenceCopyLocalPaths)</c>. This
 /// task drops any item whose simple file name (without extension) equals a
-/// routed package id, while keeping the renamed
+/// package id that Phase 1 proved no caller still binds to, while keeping the renamed
 /// <c>{PackageId}.Switchyard.{version}.dll</c> assemblies.
 /// </summary>
 public sealed class SwitchyardPublishFilterTask : Task
@@ -25,8 +25,9 @@ public sealed class SwitchyardPublishFilterTask : Task
     public ITaskItem[]? CopyLocalItems { get; set; }
 
     /// <summary>
-    /// The routed assemblies emitted by <see cref="SwitchyardTask"/>, whose
-    /// item specs are the original package ids (e.g. <c>TargetLib</c>).
+    /// Package ids whose original assemblies Phase 1 removed from the build
+    /// copy-local stream. Packages whose original version is still used by at
+    /// least one caller must not be listed here.
     /// </summary>
     [Required]
     public ITaskItem[]? RoutedAssemblies { get; set; }
@@ -40,8 +41,8 @@ public sealed class SwitchyardPublishFilterTask : Task
 
     /// <summary>
     /// The filtered items: every input item whose file name (without
-    /// extension) is NOT one of the routed package ids, and whose file name is
-    /// NOT a blocked native file name, with all metadata preserved.
+    /// extension) is NOT one of the removable original package ids, and whose
+    /// file name is NOT a blocked native file name, with all metadata preserved.
     /// </summary>
     [Output]
     public ITaskItem[]? FilteredItems { get; set; }
