@@ -4,7 +4,7 @@ using SkiaSharp;
 namespace WebpAnimationDemo;
 
 /// <summary>
-/// Builds a bouncing-ball animated WebP using <c>SKWebpEncoder.EncodeAnimated</c>,
+/// Builds a spinning-pinwheel animated WebP using <c>SKWebpEncoder.EncodeAnimated</c>,
 /// an API available in SkiaSharp 4.148.0 and later. This project declares
 /// SkiaSharp 4.148.0 so it compiles against that version and sees SKWebpEncoder;
 /// Switchyard routes Avalonia (and any other non-app caller) DOWN to 2.88.9 at
@@ -12,10 +12,20 @@ namespace WebpAnimationDemo;
 /// </summary>
 public static class WebpEncoder
 {
-    private const int Width = 128;
-    private const int Height = 96;
-    private const int FrameCount = 24;
-    private static readonly TimeSpan FrameDuration = TimeSpan.FromMilliseconds(80);
+    private const int Width = 160;
+    private const int Height = 120;
+    private const int FrameCount = 36;
+    private static readonly TimeSpan FrameDuration = TimeSpan.FromMilliseconds(55);
+
+    private static readonly SKColor[] BladeColors =
+    [
+        new(239, 71, 111),
+        new(255, 209, 102),
+        new(6, 214, 160),
+        new(17, 138, 178),
+        new(131, 56, 236),
+        new(255, 127, 80),
+    ];
 
     /// <summary>
     /// Encodes the animation to <paramref name="outputPath"/> and returns the
@@ -31,17 +41,52 @@ public static class WebpEncoder
             {
                 var bitmap = new SKBitmap(info);
                 using var canvas = new SKCanvas(bitmap);
-                canvas.Clear(SKColors.White);
+                canvas.Clear(new SKColor(17, 24, 39));
 
-                float t = (float)i / (FrameCount - 1);
-                float ballX = Width * t;
-                float ballY = (float)(Height * 0.5 + Height * 0.35 * Math.Sin(t * Math.PI * 2));
-                using var paint = new SKPaint
+                float turn = (float)i / FrameCount;
+                float centerX = Width / 2f;
+                float centerY = Height / 2f;
+                float outerRadius = Math.Min(Width, Height) * 0.44f;
+                var bounds = SKRect.Create(
+                    centerX - outerRadius,
+                    centerY - outerRadius,
+                    outerRadius * 2,
+                    outerRadius * 2);
+
+                using var bladePaint = new SKPaint
                 {
-                    Color = new SKColor(30, 115, 190, 255),
                     IsAntialias = true,
+                    Style = SKPaintStyle.Fill,
                 };
-                canvas.DrawCircle(ballX, ballY, 10, paint);
+
+                for (int blade = 0; blade < 12; blade++)
+                {
+                    float startAngle = turn * 360f + blade * 30f;
+                    bladePaint.Color = BladeColors[blade % BladeColors.Length];
+                    canvas.DrawArc(bounds, startAngle, 20f, true, bladePaint);
+                }
+
+                using var ringPaint = new SKPaint
+                {
+                    Color = SKColors.White,
+                    IsAntialias = true,
+                    Style = SKPaintStyle.Stroke,
+                    StrokeWidth = 3,
+                };
+                canvas.DrawCircle(centerX, centerY, outerRadius + 3, ringPaint);
+
+                float markerAngle = (turn * MathF.PI * 2f) - (MathF.PI / 2f);
+                float markerX = centerX + MathF.Cos(markerAngle) * (outerRadius + 3);
+                float markerY = centerY + MathF.Sin(markerAngle) * (outerRadius + 3);
+                using var markerPaint = new SKPaint
+                {
+                    Color = SKColors.White,
+                    IsAntialias = true,
+                    Style = SKPaintStyle.Fill,
+                };
+                canvas.DrawCircle(markerX, markerY, 6, markerPaint);
+                canvas.DrawCircle(centerX, centerY, 11, markerPaint);
+
                 frames[i] = new SKWebpEncoderFrame(bitmap, FrameDuration);
             }
 

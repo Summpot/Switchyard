@@ -670,7 +670,7 @@ public sealed class SwitchyardPipeline
             var id = dep.Attribute("id")?.Value;
             var ver = dep.Attribute("version")?.Value;
             if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(ver))
-                yield return (id, ver);
+                yield return (id!, ver!);
         }
     }
 
@@ -706,11 +706,11 @@ public sealed class SwitchyardPipeline
             _ => "x64",
         };
 
-        if (OperatingSystem.IsWindows())
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             return "win-" + arch;
-        if (OperatingSystem.IsLinux())
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             return "linux-" + arch;
-        if (OperatingSystem.IsMacOS())
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             return "osx-" + arch;
         return "win-" + arch;
     }

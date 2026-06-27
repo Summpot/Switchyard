@@ -66,15 +66,15 @@ public static class ConfigurationParser
     private static IReadOnlyList<RouteEntry> ParseRouteTable(string routes)
     {
         var entries = new List<RouteEntry>();
-        foreach (var segment in routes.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var segment in routes.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
         {
-            var pair = segment.AsSpan().Trim();
+            var pair = segment.Trim();
             var eq = pair.IndexOf('=');
             if (eq < 0)
                 continue;
 
-            var caller = pair[..eq].Trim().ToString();
-            var version = pair[(eq + 1)..].Trim().ToString();
+            var caller = pair.Substring(0, eq).Trim();
+            var version = pair.Substring(eq + 1).Trim();
 
             if (caller.Length == 0 || version.Length == 0)
                 continue;

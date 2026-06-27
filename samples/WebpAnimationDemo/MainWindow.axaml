@@ -5,7 +5,7 @@
 
   <Grid RowDefinitions="Auto,*,Auto" Margin="16">
     <TextBlock Grid.Row="0" FontSize="16" FontWeight="Bold"
-               Text="Animated WebP via SkiaSharp 4.147.0-preview + Avalonia on 2.88.9" />
+               Text="Animated WebP via SkiaSharp 4.148.0 + Avalonia on 2.88.9" />
     <Image Grid.Row="1" Name="Preview" Stretch="Uniform" Margin="0,12" />
     <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12">
       <Button Name="EncodeButton" Click="OnEncodeClick">Encode WebP</Button>

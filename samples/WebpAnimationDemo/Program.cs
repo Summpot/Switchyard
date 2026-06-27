@@ -19,9 +19,9 @@ public static class Program
         Console.WriteLine("[DEMO] App's SkiaSharp (compile + own code): "
             + typeof(SKWebpEncoder).Assembly.GetName().Version);
 
-        string outPath = Path.Combine(AppContext.BaseDirectory, "bouncing-ball.webp");
+        string outPath = Path.Combine(AppContext.BaseDirectory, "spinning-pinwheel.webp");
         var bytes = WebpEncoder.EncodeAnimation(outPath);
-        Console.WriteLine("[DEMO] Animated WebP written: bouncing-ball.webp ("
+        Console.WriteLine("[DEMO] Animated WebP written: spinning-pinwheel.webp ("
             + (bytes?.Length ?? 0) + " bytes) via SKWebpEncoder (4.148.0 only)");
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);

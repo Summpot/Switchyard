@@ -209,7 +209,7 @@ public sealed class AssetsFileParser
             if (Path.IsPathRooted(first))
                 return first;
             if (projectDir is not null)
-                return Path.GetFullPath(first, projectDir + Path.DirectorySeparatorChar);
+                return Path.GetFullPath(Path.Combine(projectDir, first));
         }
 
         var env = Environment.GetEnvironmentVariable("NUGET_PACKAGES");

@@ -32,18 +32,23 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <_TaskOutputPath>$(MSBuildThisFileDirectory)..\Switchyard.Task\bin\$(Configuration)\net8.0\</_TaskOutputPath>
+    <_Net472TaskOutputPath>$(MSBuildThisFileDirectory)..\Switchyard.Task\bin\$(Configuration)\net472\</_Net472TaskOutputPath>
+    <_Net8TaskOutputPath>$(MSBuildThisFileDirectory)..\Switchyard.Task\bin\$(Configuration)\net8.0\</_Net8TaskOutputPath>
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);IncludeSwitchyardTaskOutputs</TargetsForTfmSpecificContentInPackage>
   </PropertyGroup>
 
   <Target Name="IncludeSwitchyardTaskOutputs">
     <ItemGroup>
-      <TfmSpecificPackageFile Include="$(_TaskOutputPath)*.dll"
-                              PackagePath="tasks\net8.0\%(Filename)%(Extension)" />
-      <TfmSpecificPackageFile Include="$(_TaskOutputPath)Switchyard.Task.pdb"
-                              PackagePath="tasks\net8.0\Switchyard.Task.pdb" />
-      <TfmSpecificPackageFile Include="$(_TaskOutputPath)Switchyard.Task.deps.json"
-                              PackagePath="tasks\net8.0\Switchyard.Task.deps.json" />
+      <TfmSpecificPackageFile Include="$(_Net472TaskOutputPath)*.dll"
+                              PackagePath="tasks\net472\" />
+      <TfmSpecificPackageFile Include="$(_Net472TaskOutputPath)Switchyard.Task.pdb"
+                              PackagePath="tasks\net472\" />
+      <TfmSpecificPackageFile Include="$(_Net8TaskOutputPath)*.dll"
+                              PackagePath="tasks\net8.0\" />
+      <TfmSpecificPackageFile Include="$(_Net8TaskOutputPath)Switchyard.Task.pdb"
+                              PackagePath="tasks\net8.0\" />
+      <TfmSpecificPackageFile Include="$(_Net8TaskOutputPath)Switchyard.Task.deps.json"
+                              PackagePath="tasks\net8.0\" />
     </ItemGroup>
   </Target>
 

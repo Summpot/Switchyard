@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using SkiaSharp;
 
 namespace WebpAnimationDemo;
@@ -12,6 +13,10 @@ public partial class MainWindow : Window
 {
     private Image _preview = null!;
     private TextBlock _status = null!;
+    private readonly List<Bitmap> _previewFrames = [];
+    private readonly List<TimeSpan> _previewFrameDurations = [];
+    private DispatcherTimer? _previewTimer;
+    private int _previewFrameIndex;
 
     public MainWindow()
     {
@@ -22,10 +27,8 @@ public partial class MainWindow : Window
 
     private void OnEncodeClick(object? sender, RoutedEventArgs e)
     {
-        // Re-encode on demand via WebpEncoder.dll (routed to SkiaSharp
-        // 4.147.0-preview by Switchyard). Then show the first frame in the
-        // Avalonia Image, which renders through Avalonia's own 2.88.9 SkiaSharp.
-        string outPath = Path.Combine(AppContext.BaseDirectory, "bouncing-ball.webp");
+        // Re-encode on demand via the app's SkiaSharp 4.148.0, then play the frames in Avalonia.
+        string outPath = Path.Combine(AppContext.BaseDirectory, "spinning-pinwheel.webp");
         var bytes = WebpEncoder.EncodeAnimation(outPath);
         if (bytes is null)
         {
@@ -33,19 +36,72 @@ public partial class MainWindow : Window
             return;
         }
 
+        int frameCount = ShowAnimatedPreview(bytes);
+        _status.Text = $"Wrote spinning-pinwheel.webp ({bytes.Length} bytes), {frameCount} frames";
+    }
+
+    private int ShowAnimatedPreview(byte[] bytes)
+    {
+        StopPreviewAnimation();
+
         using var data = SKData.CreateCopy(bytes);
         using var codec = SKCodec.Create(data);
-        var info = new SKImageInfo(codec.Info.Width, codec.Info.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
-        using var bmp = new SKBitmap(info);
-        codec.GetPixels(bmp.Info, bmp.GetPixels(out _));
-        using var skImage = SKImage.FromBitmap(bmp);
-        using var pngStream = new MemoryStream();
-        skImage.Encode(SKEncodedImageFormat.Png, 100).SaveTo(pngStream);
-        pngStream.Position = 0;
+        var decodeInfo = new SKImageInfo(codec.Info.Width, codec.Info.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        int frameCount = Math.Max(1, codec.FrameCount);
 
-        var avBmp = new Bitmap(pngStream);
-        _preview.Source = avBmp;
-        _status.Text = $"Wrote bouncing-ball.webp ({bytes.Length} bytes), {codec.FrameCount} frames";
+        for (int i = 0; i < frameCount; i++)
+        {
+            using var bmp = new SKBitmap(decodeInfo);
+            codec.GetPixels(bmp.Info, bmp.GetPixels(out _), new SKCodecOptions(i));
+
+            using var skImage = SKImage.FromBitmap(bmp);
+            using var pngStream = new MemoryStream();
+            skImage.Encode(SKEncodedImageFormat.Png, 100).SaveTo(pngStream);
+            pngStream.Position = 0;
+            _previewFrames.Add(new Bitmap(pngStream));
+
+            int durationMs = codec.FrameInfo.Length > i ? codec.FrameInfo[i].Duration : 0;
+            _previewFrameDurations.Add(TimeSpan.FromMilliseconds(durationMs > 0 ? durationMs : 55));
+        }
+
+        _previewFrameIndex = 0;
+        _preview.Source = _previewFrames[0];
+        if (_previewFrames.Count > 1)
+        {
+            _previewTimer = new DispatcherTimer { Interval = _previewFrameDurations[0] };
+            _previewTimer.Tick += OnPreviewTimerTick;
+            _previewTimer.Start();
+        }
+
+        return frameCount;
+    }
+
+    private void OnPreviewTimerTick(object? sender, EventArgs e)
+    {
+        if (_previewFrames.Count == 0 || _previewTimer is null)
+            return;
+
+        _previewFrameIndex = (_previewFrameIndex + 1) % _previewFrames.Count;
+        _preview.Source = _previewFrames[_previewFrameIndex];
+        _previewTimer.Interval = _previewFrameDurations[_previewFrameIndex];
+    }
+
+    private void StopPreviewAnimation()
+    {
+        if (_previewTimer is not null)
+        {
+            _previewTimer.Stop();
+            _previewTimer.Tick -= OnPreviewTimerTick;
+            _previewTimer = null;
+        }
+
+        _preview.Source = null;
+        foreach (var frame in _previewFrames)
+            frame.Dispose();
+
+        _previewFrames.Clear();
+        _previewFrameDurations.Clear();
+        _previewFrameIndex = 0;
     }
 
     private void OnOpenClick(object? sender, RoutedEventArgs e)
