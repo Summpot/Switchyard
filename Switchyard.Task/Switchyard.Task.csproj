@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net472;net8.0</TargetFrameworks>
+    <TargetFrameworks>net472;net10.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
@@ -16,12 +16,12 @@
   <ItemGroup>
     <PackageReference Include="AsmResolver.DotNet" Version="6.0.0" />
     <PackageReference Include="AsmResolver.Symbols.Pdb" Version="6.0.0" />
-    <PackageReference Include="Microsoft.Build.Utilities.Core" Version="17.11.4" />
-    <PackageReference Include="NuGet.Configuration" Version="6.14.3" />
-    <PackageReference Include="NuGet.Packaging" Version="6.14.3" />
-    <PackageReference Include="NuGet.ProjectModel" Version="6.14.3" />
-    <PackageReference Include="NuGet.Protocol" Version="6.14.3" />
-    <PackageReference Include="NuGet.Versioning" Version="6.14.3" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" Version="18.7.1" />
+    <PackageReference Include="NuGet.Configuration" Version="7.6.0" />
+    <PackageReference Include="NuGet.Packaging" Version="7.6.0" />
+    <PackageReference Include="NuGet.ProjectModel" Version="7.6.0" />
+    <PackageReference Include="NuGet.Protocol" Version="7.6.0" />
+    <PackageReference Include="NuGet.Versioning" Version="7.6.0" />
   </ItemGroup>
 
 </Project>
