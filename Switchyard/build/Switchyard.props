@@ -3,6 +3,14 @@
   <PropertyGroup>
     <SwitchyardEnabled Condition="'$(SwitchyardEnabled)' == ''">true</SwitchyardEnabled>
     <SwitchyardSilent Condition="'$(SwitchyardSilent)' == ''">false</SwitchyardSilent>
+    <!--
+      Opt-in strong-name re-signing. Set SwitchyardStrongNameKeyFile to a .snk
+      key-pair file path to re-sign every routed assembly with that key (instead
+      of the default strong-name-stripping behaviour) and stamp every redirected
+      caller reference with the key's public key token. Unset = strip strong
+      names (default, original behaviour).
+    -->
+    <SwitchyardStrongNameKeyFile Condition="'$(SwitchyardStrongNameKeyFile)' == ''"></SwitchyardStrongNameKeyFile>
   </PropertyGroup>
 
 </Project>

@@ -183,21 +183,44 @@ never scan method bodies.
 * `AssemblyWeaver.PrepareAndRename` — renames the target, strips the strong
   name (`PublicKey = null`, `HashAlgorithm = None`), repoints the CodeView
   (RSDS) debug data path at the new `.pdb` filename, and copies the `.pdb`
-  alongside. The MVID is preserved so debug binding stays intact.
+  alongside. The MVID is preserved so debug binding stays intact. When an
+  opt-in `StrongNameKey` is supplied (the `SwitchyardStrongNameKeyFile`
+  property), it instead re-signs the routed assembly with the user-provided
+  key (see "Opt-in strong-name re-signing" below).
 * `AssemblyWeaver.StripStrongNameInPlace` — strips the strong name without
   renaming (used when an original-version package participates in a group but
   keeps its identity).
+* `StrongNameKey` — loads a `.snk` key pair, derives the public-key blob and
+  8-byte token, and signs a delay-signed PE in place via AsmResolver's
+  `StrongNameSigner` (pure managed, cross-platform — no `sn.exe`).
 * `ReferenceRedirector.RedirectReferences` — rewrites a caller's
-  `AssemblyReferences` table, syncs the version, clears the public key token,
-  repoints the CodeView path, copies the `.pdb`.
+  `AssemblyReferences` table, syncs the version, clears the public key token
+  (or stamps the opt-in re-sign key's token when one was supplied), repoints
+  the CodeView path, copies the `.pdb`.
 * `ReferenceRedirector.ReferencesAnyPackage` — short-circuit predicate so the
   pipeline does not rewrite assemblies that do not reference any routed
   package.
 
+### Opt-in strong-name re-signing
+
+By default Switchyard **strips** the strong name from routed assemblies. Set
+the MSBuild property `SwitchyardStrongNameKeyFile` to a `.snk` key-pair file to
+instead **re-sign** every routed assembly with that key and stamp every
+redirected caller `AssemblyReference` with the key's public key token, so the
+CLR binds the routed assembly by `(Name, Version, PublicKeyToken)`. A single
+key is shared across all routed versions (isolation comes from the routed
+assembly name, not the key). Signing is done in-process by AsmResolver's
+`StrongNameSigner` (SHA-1, the traditional strong-name algorithm). Original
+versions that keep their identity (`StripStrongNameInPlace`) are **not**
+re-signed — re-signing would change their token and break unrouted callers.
+After a RouteGroup cascade rewrites a routed assembly's own references, it is
+re-signed in place because the content changed.
+
 ### Limitations baked into the design
 
-* Strong names are stripped → re-sign the output if your environment requires
-  strong-name verification or GAC deployment.
+* Strong names are stripped by default → set `SwitchyardStrongNameKeyFile`
+  to re-sign with a user-provided key, or re-sign the output out-of-band if
+  your environment requires strong-name verification or GAC deployment.
 * String-literal reflection across a route boundary fails — the weaver cannot
   see `Type.GetType("…, AssemblyName")` literals.
 * NativeAOT/trimming may need the routed assemblies declared as roots in

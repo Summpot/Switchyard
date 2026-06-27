@@ -177,6 +177,8 @@ public sealed class SwitchyardPipeline
     private readonly PackageResolver _resolver;
     private readonly string _assemblyName;
     private readonly string _nativeAotDirectPInvokeMode;
+    private readonly string? _strongNameKeyFile;
+    private StrongNameKey? _strongNameKey;
 
     private SwitchyardPipeline(
         string intermediateDir,
@@ -184,7 +186,8 @@ public sealed class SwitchyardPipeline
         AssetsFileParser? assets,
         PackageResolver resolver,
         string assemblyName,
-        string? nativeAotDirectPInvokeMode)
+        string? nativeAotDirectPInvokeMode,
+        string? strongNameKeyFile)
     {
         _intermediateDir = intermediateDir;
         _targetFramework = targetFramework;
@@ -192,17 +195,26 @@ public sealed class SwitchyardPipeline
         _resolver = resolver;
         _assemblyName = assemblyName;
         _nativeAotDirectPInvokeMode = nativeAotDirectPInvokeMode ?? string.Empty;
+        _strongNameKeyFile = strongNameKeyFile;
     }
 
     /// <summary>
     /// Creates a pipeline using the supplied configuration.
     /// </summary>
+    /// <param name="strongNameKeyFile">Optional path to a strong-name key pair
+    /// <c>.snk</c>. When supplied (the opt-in <c>SwitchyardStrongNameKeyFile</c>
+    /// MSBuild property), each routed assembly is re-signed with this key
+    /// instead of having its strong name stripped, and every redirected caller
+    /// reference carries the key's public key token so the CLR binds by
+    /// <c>(Name, Version, PublicKeyToken)</c>. <c>null</c> keeps the default
+    /// strong-name-stripping behaviour.</param>
     public static SwitchyardPipeline Create(
         string intermediateOutputPath,
         string targetFramework,
         string? projectAssetsFile,
         string assemblyName,
-        string? nativeAotDirectPInvokeMode = null)
+        string? nativeAotDirectPInvokeMode = null,
+        string? strongNameKeyFile = null)
     {
         // MSBuild frequently passes relative paths (e.g. "obj\project.assets.json").
         // Normalise everything against the current working directory (which MSBuild
@@ -225,7 +237,22 @@ public sealed class SwitchyardPipeline
         var nugetConfig = FindNuGetConfig(Path.GetDirectoryName(projectAssetsFile) ?? intermediateOutputPath);
         var resolver = PackageResolver.Create(globalPackagesFolder, nugetConfig);
 
-        return new SwitchyardPipeline(intermediateDir, targetFramework, assets, resolver, assemblyName, nativeAotDirectPInvokeMode);
+        return new SwitchyardPipeline(intermediateDir, targetFramework, assets, resolver, assemblyName, nativeAotDirectPInvokeMode, strongNameKeyFile);
+    }
+
+    /// <summary>
+    /// Lazily loads the opt-in strong-name key pair. Returns <c>null</c> when
+    /// no <c>SwitchyardStrongNameKeyFile</c> was supplied. The key is loaded
+    /// once and cached so every routed assembly is signed with the same key
+    /// (and therefore carries the same public key token on caller references).
+    /// </summary>
+    private StrongNameKey? GetStrongNameKey()
+    {
+        if (_strongNameKeyFile is null)
+            return null;
+        if (_strongNameKey is null)
+            _strongNameKey = StrongNameKey.Load(_strongNameKeyFile);
+        return _strongNameKey;
     }
 
     /// <summary>
@@ -259,6 +286,7 @@ public sealed class SwitchyardPipeline
         // SkiaSharp 2.88.9 -> 2.88.0.0). Used to sync the caller's
         // AssemblyReference.Version so the CLR binds by (Name, Version).
         var routedNameToAssemblyVersion = new Dictionary<string, string>(StringComparer.Ordinal);
+        var signKey = GetStrongNameKey();
         foreach (var cfg in configurations)
         {
             foreach (var version in cfg.GetAllTargetVersions())
@@ -276,7 +304,7 @@ public sealed class SwitchyardPipeline
                     continue;
 
                 var outDll = Path.Combine(_intermediateDir, routedName + ".dll");
-                AssemblyWeaver.PrepareAndRename(sourceDll, routedName, outDll);
+                AssemblyWeaver.PrepareAndRename(sourceDll, routedName, outDll, signKey);
 
                 // The routed assembly keeps its original AssemblyVersion (e.g.
                 // SkiaSharp 2.88.9 -> AssemblyVersion 2.88.0.0). Capture it from
@@ -415,11 +443,21 @@ public sealed class SwitchyardPipeline
                     }
 
                     var tempPath = Path.Combine(_intermediateDir, routedName + ".tmp.dll");
-                    ReferenceRedirector.RedirectReferences(dllPath, redirections, tempPath, nativeRedirs, versionOverrides);
+                    ReferenceRedirector.RedirectReferences(
+                        dllPath, redirections, tempPath, nativeRedirs, versionOverrides,
+                        signKey?.PublicKeyToken);
                     if (File.Exists(tempPath))
                     {
                         File.Delete(dllPath);
                         File.Move(tempPath, dllPath);
+
+                        // The cascade rewrote this routed assembly's own
+                        // references, so the strong-name signature computed in
+                        // loop 1 is now invalid. Re-sign the same file in place
+                        // with the user-provided key. (No-op when strong-name
+                        // re-signing was not opted in — the routed assembly was
+                        // left without a strong name in loop 1.)
+                        signKey?.Sign(dllPath);
                     }
                 }
             }
@@ -501,7 +539,8 @@ public sealed class SwitchyardPipeline
             var callerFileName = Path.GetFileName(callerPath);
             var outPath = Path.Combine(_intermediateDir, callerFileName);
             ReferenceRedirector.RedirectReferences(
-                callerPath, redirections, outPath, callerNativeRedirs, callerVersionOverrides);
+                callerPath, redirections, outPath, callerNativeRedirs, callerVersionOverrides,
+                signKey?.PublicKeyToken);
 
             var outPdb = Path.ChangeExtension(outPath, ".pdb");
             redirectedCallers.Add(new RedirectedCaller(

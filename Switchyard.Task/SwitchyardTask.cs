@@ -80,6 +80,17 @@ public sealed class SwitchyardTask : Task
     public bool Silent { get; set; }
 
     /// <summary>
+    /// Optional path to a strong-name key pair <c>.snk</c>. When set (the
+    /// opt-in <c>$(SwitchyardStrongNameKeyFile)</c> MSBuild property), each
+    /// routed assembly is re-signed with this key instead of having its
+    /// strong name stripped, and every redirected caller reference carries
+    /// the key's public key token so the CLR binds the routed assembly by
+    /// <c>(Name, Version, PublicKeyToken)</c>. When unset, the default
+    /// strong-name-stripping behaviour is kept.
+    /// </summary>
+    public string? StrongNameKeyFile { get; set; }
+
+    /// <summary>
     /// The updated copy-local list. Replaces <c>@(ReferenceCopyLocalPaths)</c>
     /// in the calling target via an <c>&lt;Output&gt;</c> element.
     /// </summary>
@@ -183,7 +194,8 @@ public sealed class SwitchyardTask : Task
                 targetFramework,
                 ProjectAssetsFile,
                 assemblyName,
-                NativeAotDirectPInvokeMode);
+                NativeAotDirectPInvokeMode,
+                StrongNameKeyFile);
 
             var result = pipeline.Execute(configurations, callerPaths);
 

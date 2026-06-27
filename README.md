@@ -95,6 +95,7 @@ In `AuthModule`, both `TargetLib` and `CommonUtils` route to 1.0.0, and the
 | ------------------ | ------- | ------------------------------------------------------------ |
 | `SwitchyardEnabled` | `true`  | Master on/off switch. Set `false` to disable weaving without removing the package reference. |
 | `SwitchyardSilent`  | `false` | Suppresses the high-importance diagnostic messages.          |
+| `SwitchyardStrongNameKeyFile` | *(unset)* | Opt-in strong-name re-signing. Path to a `.snk` key-pair file. When set, each routed assembly is re-signed with this key (instead of having its strong name stripped) and every redirected caller reference carries the key's public key token, so the CLR binds the routed assembly by `(Name, Version, PublicKeyToken)`. Signing runs entirely in-process — no `sn.exe` required. Unset = strip strong names (the default). |
 
 ## Runtime contract — the one rule you must follow
 
@@ -143,9 +144,14 @@ two `libskiasharp` copies coexist by name.
 
 ## Known limitations
 
-* **Strong-name stripping.** Renamed assemblies lose their original strong-name
-  signature. Environments that require strict strong-name verification or GAC
-  deployment must re-sign the output with a custom key after weaving.
+* **Strong-name stripping (default).** Renamed assemblies lose their original
+  strong-name signature. Set `SwitchyardStrongNameKeyFile` to a `.snk`
+  key-pair file to instead re-sign every routed assembly with that key (in
+  process, no `sn.exe`) and stamp the key's public key token onto every
+  redirected caller reference, so the routed assemblies keep a valid
+  strong-name identity. Environments that need a *specific* key or SHA-256
+  enhanced strong names can still re-sign the output out-of-band after
+  weaving.
 * **String-literal reflection.** Hard-coded `Type.GetType("…, AssemblyName")`
   across a route boundary will not resolve — avoid it.
 * **NativeAOT / trimming.** The static analyser cannot always trace the

@@ -36,16 +36,45 @@ public static class AssemblyWeaver
     /// that require strong-name verification or GAC deployment must re-sign
     /// the output with a custom key after weaving.
     /// </remarks>
-    public static void PrepareAndRename(string sourcePath, string routedName, string outputPath)
+    /// <param name="signKey">When non-null, the routed assembly is re-signed
+    /// with this user-provided strong-name key instead of having its strong
+    /// name stripped. The key's public-key blob is written into
+    /// <c>AssemblyDefinition.PublicKey</c> (so the strong-name data directory
+    /// is allocated at <c>Modulus.Length</c> size on write) and the RSA
+    /// signature is computed in-process via AsmResolver's
+    /// <c>StrongNameSigner</c>. Callers redirected to this routed assembly
+    /// must in turn carry the key's public key token — see
+    /// <see cref="ReferenceRedirector.RedirectReferences"/>.
+    /// </param>
+    public static void PrepareAndRename(string sourcePath, string routedName, string outputPath, StrongNameKey? signKey = null)
     {
         var module = ReadModule(sourcePath);
         if (module.Assembly is null)
             throw new InvalidOperationException($"'{sourcePath}' does not contain an assembly manifest.");
 
         module.Assembly.Name = routedName;
-        module.Assembly.PublicKey = null;
-        module.Assembly.HasPublicKey = false;
-        module.Assembly.HashAlgorithm = AssemblyHashAlgorithm.None;
+
+        if (signKey is not null)
+        {
+            // Opt-in re-signing: replace the original strong-name identity with
+            // the user-provided key. AsmResolver's default DotNetDirectoryFactory
+            // derives the strong-name data directory size from the PublicKey
+            // (publicKey.Length - 0x20 == Modulus.Length), so the directory is
+            // allocated at the right size during module.Write and the signature
+            // slot is filled by signKey.Sign below. Set the StrongNameSigned
+            // directory flag so the CLR treats the assembly as fully signed and
+            // IsStrongNameSigned reports true after the re-read.
+            module.Assembly.PublicKey = signKey.PublicKeyBlob;
+            module.Assembly.HasPublicKey = true;
+            module.Assembly.HashAlgorithm = AssemblyHashAlgorithm.Sha1;
+            module.IsStrongNameSigned = true;
+        }
+        else
+        {
+            module.Assembly.PublicKey = null;
+            module.Assembly.HasPublicKey = false;
+            module.Assembly.HashAlgorithm = AssemblyHashAlgorithm.None;
+        }
 
         UpdateCodeViewPdbPath(module, Path.ChangeExtension(outputPath, ".pdb"));
 
@@ -54,6 +83,9 @@ public static class AssemblyWeaver
             Directory.CreateDirectory(dir);
 
         module.Write(outputPath);
+
+        if (signKey is not null)
+            signKey.Sign(outputPath);
 
         CopyPdb(sourcePath, Path.ChangeExtension(outputPath, ".pdb"));
     }

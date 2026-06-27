@@ -49,12 +49,23 @@ public static class ReferenceRedirector
     /// <c>AssemblyVersion</c> 2.88.0.0). The CLR binds on
     /// <c>(Name, Version, PublicKey)</c>, so this sync is mandatory.
     /// </param>
+    /// <param name="routedPublicKeyToken">
+    /// Optional 8-byte public key token to write into every redirected
+    /// <c>AssemblyReference</c>. Used only when the routed assemblies were
+    /// re-signed with a user-provided <see cref="StrongNameKey"/> (opt-in
+    /// strong-name re-signing). When <c>null</c>, the redirected reference's
+    /// <c>PublicKeyOrToken</c> is cleared (the default behaviour, matching
+    /// stripped strong names). When non-null, the caller binds against the
+    /// routed assembly's new strong-name identity by
+    /// <c>(Name, Version, PublicKeyToken)</c>.
+    /// </param>
     public static void RedirectReferences(
         string assemblyPath,
         IReadOnlyDictionary<string, string> redirections,
         string outputPath,
         IReadOnlyDictionary<string, string>? nativeRedirections = null,
-        IReadOnlyDictionary<string, Version>? assemblyVersionOverrides = null)
+        IReadOnlyDictionary<string, Version>? assemblyVersionOverrides = null,
+        byte[]? routedPublicKeyToken = null)
     {
         if (redirections.Count == 0 && (nativeRedirections is null || nativeRedirections.Count == 0))
             return;
@@ -90,7 +101,11 @@ public static class ReferenceRedirector
             routedVersion ??= ExtractRoutedVersion(routedName);
             if (routedVersion is not null)
                 reference.Version = routedVersion;
-            reference.PublicKeyOrToken = null;
+            // When the routed assemblies were re-signed with a user-provided key,
+            // stamp the new public key token onto the redirected reference so the
+            // CLR binds by (Name, Version, PublicKeyToken). Otherwise clear the
+            // token to match the default stripped-strong-name behaviour.
+            reference.PublicKeyOrToken = routedPublicKeyToken;
             reference.HasPublicKey = false;
             changed = true;
         }
