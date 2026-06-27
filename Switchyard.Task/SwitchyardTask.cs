@@ -105,6 +105,15 @@ public sealed class SwitchyardTask : Task
     public ITaskItem[]? NewRemovedOriginalNativePaths { get; set; }
 
     /// <summary>
+    /// The routed native libraries produced by the pipeline, each carrying the
+    /// routed <c>DllImport</c> module name as metadata. NativeAOT direct
+    /// P/Invoke consumes these names so it binds the version-specific native
+    /// libraries that Switchyard already wrote into managed metadata.
+    /// </summary>
+    [Output]
+    public ITaskItem[]? NewRoutedNativeLibraries { get; set; }
+
+    /// <summary>
     /// The package ids whose original (un-routed) DLL was removed from the
     /// copy-local output because every caller is routed away from it. Consumed
     /// by the deps.json patcher so it strips those packages' runtime entries
@@ -178,6 +187,7 @@ public sealed class SwitchyardTask : Task
             NewRemovedOriginalNativePaths = result.RemovedOriginalNativePaths
                 .Select(p => new TaskItem(p))
                 .ToArray();
+            NewRoutedNativeLibraries = BuildRoutedNativeLibraryItems(result);
             // Derive the package ids whose original DLL was removed — those are
             // the ones the deps.json patcher may strip the runtime entry for.
             NewStrippedOriginalPackageIds = result.RemovedOriginalPaths
@@ -293,6 +303,30 @@ public sealed class SwitchyardTask : Task
             // by (Name, Version) correctly.
             item.SetMetadata("RoutedAssemblyVersion", prepared.AssemblyVersion ?? prepared.Version);
             items.Add(item);
+        }
+        return items.ToArray();
+    }
+
+    private static ITaskItem[] BuildRoutedNativeLibraryItems(SwitchyardResult result)
+    {
+        var items = new List<ITaskItem>();
+        foreach (var prepared in result.PreparedAssemblies)
+        {
+            if (!prepared.IsRouted)
+                continue;
+
+            foreach (var native in prepared.NativeLibraries)
+            {
+                var item = new TaskItem(native.RuntimePath);
+                item.SetMetadata("ModuleName", native.ModuleName);
+                item.SetMetadata("PackageId", prepared.PackageId);
+                item.SetMetadata("RoutedVersion", prepared.Version);
+                item.SetMetadata("RuntimeFileName", Path.GetFileName(native.RuntimePath));
+                item.SetMetadata("EntryPointNames", string.Join(";", native.EntryPointNames));
+                if (!string.IsNullOrWhiteSpace(native.LinkerPath))
+                    item.SetMetadata("LinkerPath", native.LinkerPath);
+                items.Add(item);
+            }
         }
         return items.ToArray();
     }

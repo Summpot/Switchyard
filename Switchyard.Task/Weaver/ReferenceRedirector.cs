@@ -219,6 +219,51 @@ public static class ReferenceRedirector
     }
 
     /// <summary>
+    /// Returns the unmanaged entry point names imported from each
+    /// <c>DllImport</c> module. NativeAOT direct P/Invoke turns these imports
+    /// into native linker symbols, so Switchyard uses this to avoid enabling
+    /// direct P/Invoke automatically when multiple routed native modules export
+    /// the same entry point name.
+    /// </summary>
+    public static IReadOnlyDictionary<string, IReadOnlyCollection<string>> GetPInvokeEntryPointNamesByModule(string assemblyPath)
+    {
+        var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        if (!IsManagedAssembly(assemblyPath))
+            return result.ToDictionary(k => k.Key, v => (IReadOnlyCollection<string>)v.Value, StringComparer.Ordinal);
+
+        try
+        {
+            var module = ReadModule(assemblyPath);
+            foreach (var type in module.GetAllTypes())
+            {
+                foreach (var method in type.Methods)
+                {
+                    var map = method.ImplementationMap;
+                    var rawModuleName = map?.Scope?.Name?.Value?.ToString();
+                    var rawEntryPoint = map?.Name?.Value?.ToString();
+                    if (string.IsNullOrWhiteSpace(rawModuleName) || string.IsNullOrWhiteSpace(rawEntryPoint))
+                        continue;
+
+                    var moduleName = rawModuleName!;
+                    var entryPoint = rawEntryPoint!;
+
+                    if (!result.TryGetValue(moduleName, out var entryPoints))
+                    {
+                        entryPoints = new HashSet<string>(StringComparer.Ordinal);
+                        result[moduleName] = entryPoints;
+                    }
+                    entryPoints.Add(entryPoint);
+                }
+            }
+        }
+        catch (BadImageFormatException)
+        {
+        }
+
+        return result.ToDictionary(k => k.Key, v => (IReadOnlyCollection<string>)v.Value, StringComparer.Ordinal);
+    }
+
+    /// <summary>
     /// Extracts the version component embedded in a routed assembly name of
     /// the form <c>{Package}.Switchyard.{version}</c> (e.g.
     /// <c>TargetLib.Switchyard.1.0.0</c> → <c>1.0.0</c>). Returns <c>null</c>

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>NativeAotBindingApp</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <SwitchyardEnabled>true</SwitchyardEnabled>
+    <SelfContained>true</SelfContained>
+    <PublishAot>true</PublishAot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Switchyard" Version="1.0.0" />
+    <PackageReference Include="NativeBindingLib" Version="2.0.0">
+      <SwitchyardRoutes>NativeAotBindingApp=1.0.0;NativeConsumerModule=3.5.0</SwitchyardRoutes>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NativeConsumerModule\NativeConsumerModule.csproj" />
+  </ItemGroup>
+
+</Project>

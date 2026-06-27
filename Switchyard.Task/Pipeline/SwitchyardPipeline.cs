@@ -20,6 +20,7 @@ public sealed class PreparedAssembly
         string version,
         bool isRouted,
         IReadOnlyList<string>? nativeLibraryPaths = null,
+        IReadOnlyList<PreparedNativeLibrary>? nativeLibraries = null,
         string? assemblyVersion = null)
     {
         DllPath = dllPath;
@@ -28,6 +29,7 @@ public sealed class PreparedAssembly
         Version = version;
         IsRouted = isRouted;
         NativeLibraryPaths = nativeLibraryPaths ?? Array.Empty<string>();
+        NativeLibraries = nativeLibraries ?? Array.Empty<PreparedNativeLibrary>();
         AssemblyVersion = assemblyVersion;
     }
 
@@ -46,6 +48,14 @@ public sealed class PreparedAssembly
     public IReadOnlyList<string> NativeLibraryPaths { get; }
 
     /// <summary>
+    /// The native libraries routed for this assembly, including the
+    /// <c>DllImport</c> module name and optional linker input. NativeAOT consumes
+    /// the module name as <c>DirectPInvoke</c>; when the native package ships an
+    /// import/static library, the linker input is added as <c>NativeLibrary</c>.
+    /// </summary>
+    public IReadOnlyList<PreparedNativeLibrary> NativeLibraries { get; }
+
+    /// <summary>
     /// The actual <c>AssemblyVersion</c> of the prepared assembly (read from
     /// the source DLL's metadata). May differ from <see cref="Version"/> (the
     /// NuGet package version): e.g. SkiaSharp 2.88.9 has
@@ -54,6 +64,49 @@ public sealed class PreparedAssembly
     /// matches the routed assembly by <c>(Name, Version)</c>.
     /// </summary>
     public string? AssemblyVersion { get; }
+}
+
+/// <summary>
+/// Describes one routed native library prepared for a routed managed assembly.
+/// </summary>
+public sealed class PreparedNativeLibrary
+{
+    public PreparedNativeLibrary(
+        string runtimePath,
+        string moduleName,
+        IReadOnlyCollection<string> entryPointNames,
+        string? linkerPath)
+    {
+        RuntimePath = runtimePath;
+        ModuleName = moduleName;
+        EntryPointNames = entryPointNames;
+        LinkerPath = linkerPath;
+    }
+
+    /// <summary>
+    /// The routed runtime native file copied to the Switchyard intermediate
+    /// directory, e.g. <c>libSkiaSharp.Switchyard.2.88.9.dll</c>.
+    /// </summary>
+    public string RuntimePath { get; }
+
+    /// <summary>
+    /// The routed <c>DllImport</c> module name written into managed metadata,
+    /// without a platform extension.
+    /// </summary>
+    public string ModuleName { get; }
+
+    /// <summary>
+    /// The unmanaged entry point names imported from this module by the routed
+    /// managed assembly.
+    /// </summary>
+    public IReadOnlyCollection<string> EntryPointNames { get; }
+
+    /// <summary>
+    /// Optional static linker input for NativeAOT. Ordinary dynamic direct
+    /// P/Invoke only needs <see cref="ModuleName"/> so the operating-system
+    /// loader binds the routed runtime library at startup.
+    /// </summary>
+    public string? LinkerPath { get; }
 }
 
 /// <summary>
@@ -231,7 +284,7 @@ public sealed class SwitchyardPipeline
                 // managed version, and rewrite its own DllImport entries to point
                 // at the renamed native names so P/Invoke binds to the
                 // version-specific native lib instead of a single shared one.
-                var nativePaths = PrepareNativeLibraries(
+                var nativeLibraries = PrepareNativeLibraries(
                     packageDir, routedName, version, outDll,
                     nativeRedirectionsByRoutedName, removedOriginalNatives, callerPaths);
 
@@ -242,7 +295,8 @@ public sealed class SwitchyardPipeline
                     cfg.PackageId,
                     version,
                     true,
-                    nativePaths,
+                    nativeLibraries.Select(n => n.RuntimePath).ToList(),
+                    nativeLibraries,
                     assemblyVersion));
             }
         }
@@ -504,7 +558,7 @@ public sealed class SwitchyardPipeline
     /// preserves the on-disk casing so it still resolves on case-sensitive OSes;
     /// the DllImport is rewritten to the metadata name's routed form.
     /// </remarks>
-    private List<string> PrepareNativeLibraries(
+    private List<PreparedNativeLibrary> PrepareNativeLibraries(
         string packageDir,
         string routedManagedName,
         string version,
@@ -513,7 +567,7 @@ public sealed class SwitchyardPipeline
         List<string> removedOriginalNatives,
         IReadOnlyList<string> callerPaths)
     {
-        var nativePaths = new List<string>();
+        var nativeLibraries = new List<PreparedNativeLibrary>();
         var rid = GetCurrentRuntimeIdentifier();
 
         // Only rewrite native libs actually referenced via DllImport by the
@@ -524,7 +578,7 @@ public sealed class SwitchyardPipeline
             ReferenceRedirector.GetPInvokeModuleNames(managedDllPath),
             StringComparer.OrdinalIgnoreCase);
         if (pinvokeNames.Count == 0)
-            return nativePaths;
+            return nativeLibraries;
 
         // Collect every directory that might hold the routed version's native
         // libraries: the routed package's own runtimes folder, plus the native
@@ -545,6 +599,7 @@ public sealed class SwitchyardPipeline
         }
 
         var nativeMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var pinvokeEntryPointsByModule = ReferenceRedirector.GetPInvokeEntryPointNamesByModule(managedDllPath);
 
         foreach (var nativeDir in nativeDirs)
         {
@@ -573,7 +628,11 @@ public sealed class SwitchyardPipeline
                 string routedFileName = fileBase + ".Switchyard." + version + ext;
                 var outNative = Path.Combine(_intermediateDir, routedFileName);
                 File.Copy(nativeFile, outNative, overwrite: true);
-                nativePaths.Add(outNative);
+
+                var entryPoints = pinvokeEntryPointsByModule.TryGetValue(dllImportName, out var names)
+                    ? names
+                    : Array.Empty<string>();
+                nativeLibraries.Add(new PreparedNativeLibrary(outNative, routedBase, entryPoints, null));
 
                 nativeMap[dllImportName] = routedBase;
 
@@ -588,7 +647,7 @@ public sealed class SwitchyardPipeline
         }
 
         if (nativeMap.Count == 0)
-            return nativePaths;
+            return nativeLibraries;
 
         nativeRedirectionsByRoutedName[routedManagedName] = nativeMap;
 
@@ -598,7 +657,7 @@ public sealed class SwitchyardPipeline
         // (not its callers) must be rewritten.
         RewritePInvokeInPlace(managedDllPath, nativeMap);
 
-        return nativePaths;
+        return nativeLibraries;
     }
 
     /// <summary>

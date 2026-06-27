@@ -19,6 +19,10 @@
              AssemblyFile="$(SwitchyardTaskAssembly)"
              Condition="'$(SwitchyardEnabled)' == 'true'" />
 
+  <UsingTask TaskName="Switchyard.SwitchyardNativeAotDirectPInvokeFilterTask"
+             AssemblyFile="$(SwitchyardTaskAssembly)"
+             Condition="'$(SwitchyardEnabled)' == 'true'" />
+
   <!--
     Phase 1: weave/redirect.
 
@@ -53,6 +57,8 @@
               ItemName="SwitchyardRoutedAssemblies" />
       <Output TaskParameter="NewRemovedOriginalNativePaths"
               ItemName="SwitchyardRemovedOriginalNativePaths" />
+      <Output TaskParameter="NewRoutedNativeLibraries"
+              ItemName="SwitchyardRoutedNativeLibraries" />
       <Output TaskParameter="NewStrippedOriginalPackageIds"
               ItemName="SwitchyardStrippedOriginalPackageIds" />
     </SwitchyardTask>
@@ -71,6 +77,71 @@
       <FileWrites Include="$(IntermediateOutputPath)switchyard\**" />
     </ItemGroup>
 
+  </Target>
+
+  <!--
+    NativeAOT direct P/Invoke shaping.
+
+    The normal Switchyard pipeline replaces @(IntermediateAssembly) for the
+    SDK's build/publish file streams, but NativeAOT computes its own
+    @(ManagedBinary) / @(IlcCompileInput) items before writing the ilc response
+    file. Keep those compiler inputs pointed at the rewritten main assembly so
+    ilc sees the same routed references the runtime would see.
+
+    The native-isolation path also rewrites each routed managed assembly's
+    DllImport module name to a version-specific native library name, e.g.
+    libSkiaSharp.Switchyard.2.88.9. NativeAOT's lazy P/Invoke path can consume
+    those rewritten names directly. Direct P/Invoke is only enabled
+    automatically for routed native modules whose imported entry point names
+    are unique; two versions of the same native package normally export the
+    same symbols, and the native linker cannot disambiguate those symbols by
+    module name alone.
+  -->
+  <Target Name="SwitchyardNativeAotCompileInputs"
+          BeforeTargets="WriteIlcRspFileForCompilation"
+          Condition="'$(SwitchyardEnabled)' == 'true'
+                     And '$(DesignTimeBuild)' != 'true'
+                     And '$(PublishAot)' == 'true'
+                     And ('$(SwitchyardNewIntermediateAssemblyPath)' != ''
+                          Or '@(SwitchyardRoutedNativeLibraries)' != '')">
+
+    <SwitchyardNativeAotDirectPInvokeFilterTask
+        RoutedNativeLibraries="@(SwitchyardRoutedNativeLibraries)"
+        Condition="'@(SwitchyardRoutedNativeLibraries)' != ''">
+      <Output TaskParameter="SafeDirectPInvokeLibraries"
+              ItemName="_SwitchyardSafeDirectPInvokeLibraries" />
+    </SwitchyardNativeAotDirectPInvokeFilterTask>
+
+    <ItemGroup>
+      <IlcCompileInput Remove="@(ManagedBinary)"
+                       Condition="'$(SwitchyardNewIntermediateAssemblyPath)' != ''" />
+      <ManagedBinary Remove="@(ManagedBinary)"
+                     Condition="'$(SwitchyardNewIntermediateAssemblyPath)' != ''" />
+      <ManagedBinary Include="$(SwitchyardNewIntermediateAssemblyPath)"
+                     Condition="'$(SwitchyardNewIntermediateAssemblyPath)' != ''" />
+      <IlcCompileInput Include="@(ManagedBinary)"
+                       Condition="'$(SwitchyardNewIntermediateAssemblyPath)' != ''" />
+
+      <_SwitchyardNativeAotModule Include="@(_SwitchyardSafeDirectPInvokeLibraries->'%(ModuleName)')"
+                                  Condition="'%(_SwitchyardSafeDirectPInvokeLibraries.ModuleName)' != ''" />
+      <_SwitchyardNativeAotLinkerInput Include="@(_SwitchyardSafeDirectPInvokeLibraries->'%(LinkerPath)')"
+                                       Condition="'%(_SwitchyardSafeDirectPInvokeLibraries.LinkerPath)' != ''" />
+
+      <DirectPInvoke Include="@(_SwitchyardNativeAotModule)" />
+      <NativeLibrary Include="@(_SwitchyardNativeAotLinkerInput)" />
+    </ItemGroup>
+
+    <Message Text="Switchyard: NativeAOT compile input uses $(SwitchyardNewIntermediateAssemblyPath)"
+             Condition="'$(SwitchyardSilent)' != 'true' And '$(SwitchyardNewIntermediateAssemblyPath)' != ''"
+             Importance="high" />
+    <Message Text="Switchyard: NativeAOT direct P/Invoke includes @(_SwitchyardNativeAotModule, ' ')"
+             Condition="'$(SwitchyardSilent)' != 'true' And '@(_SwitchyardNativeAotModule)' != ''"
+             Importance="high" />
+    <Message Text="Switchyard: NativeAOT direct P/Invoke skipped routed native libraries with duplicate entry point names; lazy P/Invoke will bind their routed module names at runtime."
+             Condition="'$(SwitchyardSilent)' != 'true'
+                        And '@(SwitchyardRoutedNativeLibraries)' != ''
+                        And '@(_SwitchyardNativeAotModule)' == ''"
+             Importance="high" />
   </Target>
 
   <!--

@@ -111,6 +111,8 @@ public static class BuildUtility
             // the global packages folder unless we force re-extraction.
             PurgeGlobalPackageCache("switchyard");
             PurgeGlobalPackageCache("nativebindinglib");
+            PurgeSamplePackageCache("switchyard");
+            PurgeSamplePackageCache("nativebindinglib");
 
             // 1. Pack Switchyard
             PackSwitchyard(repoRoot);
@@ -303,7 +305,10 @@ public static class BuildUtility
     /// </summary>
     public static void CleanProject(string projectPath)
     {
-        RunCommand("dotnet", $"clean \"{projectPath}\" --nologo", Path.GetDirectoryName(projectPath));
+        RunCommand(
+            "dotnet",
+            $"clean \"{projectPath}\" {SampleRestorePackagesPathArgument} --nologo",
+            Path.GetDirectoryName(projectPath));
     }
 
     /// <summary>
@@ -311,15 +316,22 @@ public static class BuildUtility
     /// </summary>
     public static CommandResult BuildProject(string projectPath, string configuration = "Debug")
     {
-        return RunCommand("dotnet", $"build \"{projectPath}\" -c {configuration} --nologo", Path.GetDirectoryName(projectPath));
+        return RunCommand(
+            "dotnet",
+            $"build \"{projectPath}\" -c {configuration} {SampleRestorePackagesPathArgument} --nologo",
+            Path.GetDirectoryName(projectPath));
     }
 
     /// <summary>
     /// Publishes a test sample project.
     /// </summary>
-    public static CommandResult PublishProject(string projectPath, string configuration = "Release")
+    public static CommandResult PublishProject(string projectPath, string configuration = "Release", string additionalArguments = "")
     {
-        return RunCommand("dotnet", $"publish \"{projectPath}\" -c {configuration} --nologo", Path.GetDirectoryName(projectPath));
+        return RunCommand(
+            "dotnet",
+            $"publish \"{projectPath}\" -c {configuration} {additionalArguments} {SampleRestorePackagesPathArgument} --nologo",
+            Path.GetDirectoryName(projectPath),
+            timeoutMs: 240_000);
     }
 
     /// <summary>
@@ -357,5 +369,29 @@ public static class BuildUtility
     {
         string projectDir = Path.Combine(TestSamplesPath, projectName);
         return Path.Combine(projectDir, "bin", configuration, framework, "publish");
+    }
+
+    /// <summary>
+    /// Returns the publish output directory for a RID-specific test sample
+    /// publish.
+    /// </summary>
+    public static string GetPublishDirectory(string projectName, string configuration, string framework, string runtimeIdentifier)
+    {
+        string projectDir = Path.Combine(TestSamplesPath, projectName);
+        return Path.Combine(projectDir, "bin", configuration, framework, runtimeIdentifier, "publish");
+    }
+
+    private static string SamplePackagesPath => Path.Combine(TestSamplesPath, ".nuget", "packages");
+
+    private static string SampleRestorePackagesPathArgument => $"-p:RestorePackagesPath=\"{SamplePackagesPath}\"";
+
+    private static void PurgeSamplePackageCache(string packageId)
+    {
+        string packagePath = Path.Combine(SamplePackagesPath, packageId.ToLowerInvariant());
+        if (Directory.Exists(packagePath))
+        {
+            try { Directory.Delete(packagePath, recursive: true); }
+            catch { }
+        }
     }
 }
