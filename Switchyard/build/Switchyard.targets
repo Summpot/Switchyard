@@ -1,7 +1,8 @@
 <Project>
 
   <PropertyGroup Condition="'$(SwitchyardEnabled)' == 'true'">
-    <SwitchyardTaskAssemblyDir Condition="'$(SwitchyardTaskAssemblyDir)' == ''">$(MSBuildThisFileDirectory)..\tasks\</SwitchyardTaskAssemblyDir>
+    <_SwitchyardDefaultTaskAssemblyDir>$(MSBuildThisFileDirectory)..\tasks\</_SwitchyardDefaultTaskAssemblyDir>
+    <SwitchyardTaskAssemblyDir Condition="'$(SwitchyardTaskAssemblyDir)' == ''">$(_SwitchyardDefaultTaskAssemblyDir)</SwitchyardTaskAssemblyDir>
     <_SwitchyardCoreTaskTargetFramework Condition="'$(NETCoreSdkVersion)' != ''">net$([System.Text.RegularExpressions.Regex]::Match('$(NETCoreSdkVersion)', '^[0-9]+').Value).0</_SwitchyardCoreTaskTargetFramework>
     <_SwitchyardPreferredCoreTaskAssembly Condition="'$(_SwitchyardCoreTaskTargetFramework)' != ''">$(SwitchyardTaskAssemblyDir)$(_SwitchyardCoreTaskTargetFramework)\Switchyard.Task.dll</_SwitchyardPreferredCoreTaskAssembly>
   </PropertyGroup>
@@ -14,6 +15,7 @@
 
   <PropertyGroup Condition="'$(SwitchyardEnabled)' == 'true' And '$(SwitchyardTaskAssembly)' == ''">
     <SwitchyardTaskAssembly Condition="'$(MSBuildRuntimeType)' == 'Core' And Exists('$(_SwitchyardPreferredCoreTaskAssembly)')">$(_SwitchyardPreferredCoreTaskAssembly)</SwitchyardTaskAssembly>
+    <SwitchyardTaskAssembly Condition="'$(MSBuildRuntimeType)' == 'Core' And '$(SwitchyardTaskAssembly)' == '' And '$(SwitchyardTaskAssemblyDir)' != '$(_SwitchyardDefaultTaskAssemblyDir)'">$(_SwitchyardPreferredCoreTaskAssembly)</SwitchyardTaskAssembly>
     <SwitchyardTaskAssembly Condition="'$(MSBuildRuntimeType)' == 'Core' And '$(SwitchyardTaskAssembly)' == ''">@(_SwitchyardCoreTaskAssemblyCandidate)</SwitchyardTaskAssembly>
     <SwitchyardTaskAssembly Condition="'$(MSBuildRuntimeType)' != 'Core'">@(_SwitchyardFrameworkTaskAssemblyCandidate)</SwitchyardTaskAssembly>
   </PropertyGroup>

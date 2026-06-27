@@ -86,13 +86,20 @@ jobs:
           -o ${{ runner.temp }}/nupkgs
           --nologo
 
+      - name: NuGet login (OIDC → temp API key)
+        if: steps.feed.outputs.is_tag == 'true'
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ github.repository_owner }}
+
       # ---------------------------------------------------------------------------
       # Path A — git tag: push to nuget.org.
       # ---------------------------------------------------------------------------
       - name: Push to nuget.org
         if: steps.feed.outputs.is_tag == 'true'
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
           $packages = Get-ChildItem -Path "${{ runner.temp }}/nupkgs" -Filter '*.nupkg' -File
           if ($packages.Count -eq 0) {
