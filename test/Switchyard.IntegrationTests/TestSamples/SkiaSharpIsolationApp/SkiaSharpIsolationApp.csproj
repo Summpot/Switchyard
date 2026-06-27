@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>SkiaSharpIsolationApp</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <SwitchyardEnabled>true</SwitchyardEnabled>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Switchyard" Version="1.0.0" />
+    <!--
+      The declared SkiaSharp version (2.88.8) is the "original" — restored by
+      NuGet but routed to nobody, so Switchyard blocks it from bin. The main app
+      binds 2.88.9; SkiaSharpConsumerModule binds 3.116.1. Each routed version
+      ships its own renamed libskiasharp native library, so the two SkiaSharp
+      versions coexist in one process with independent native bindings.
+    -->
+    <PackageReference Include="SkiaSharp" Version="2.88.8">
+      <SwitchyardRoutes>SkiaSharpIsolationApp=2.88.9;SkiaSharpConsumerModule=3.116.1</SwitchyardRoutes>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SkiaSharpConsumerModule\SkiaSharpConsumerModule.csproj" />
+  </ItemGroup>
+
+</Project>

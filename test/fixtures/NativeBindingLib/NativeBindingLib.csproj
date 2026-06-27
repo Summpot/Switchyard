@@ -16,15 +16,16 @@
 
   <!--
     Ship the per-RID native library built from native.c alongside the managed
-    assembly. The native file name is the bare DllImport target
-    ("nativebinding" -> nativebinding.dll on Windows, libnativebinding.so on
-    Linux). At pack time the host OS determines which runtimes/ folder is
-    populated by the build step in BuildUtility.
+    assembly. Mirrors SkiaSharp's layout: the native file is
+    "libnativebinding.{dll|so|dylib}" (the "lib" prefix on every platform, since
+    .NET does not add it on resolve) and lives under runtimes/{rid}/native/.
+    At pack time the host OS determines which runtimes/ folder is populated by
+    the build step in BuildUtility.
   -->
   <ItemGroup Condition="'$(NativeRuntimeRID)' == 'win-x64'">
-    <Content Include="runtimes\win-x64\native\nativebinding.dll"
+    <Content Include="runtimes\win-x64\native\libnativebinding.dll"
              Pack="true"
-             PackagePath="runtimes\win-x64\native\nativebinding.dll" />
+             PackagePath="runtimes\win-x64\native\libnativebinding.dll" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(NativeRuntimeRID)' == 'linux-x64'">

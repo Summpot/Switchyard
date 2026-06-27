@@ -2,6 +2,8 @@ using Switchyard.Configuration;
 using Switchyard.NuGet;
 using Switchyard.Weaver;
 using System.Runtime.InteropServices;
+using AsmResolver.DotNet;
+using AsmResolver.DotNet.Serialized;
 
 namespace Switchyard.Pipeline;
 
@@ -17,7 +19,8 @@ public sealed class PreparedAssembly
         string packageId,
         string version,
         bool isRouted,
-        IReadOnlyList<string>? nativeLibraryPaths = null)
+        IReadOnlyList<string>? nativeLibraryPaths = null,
+        string? assemblyVersion = null)
     {
         DllPath = dllPath;
         PdbPath = pdbPath;
@@ -25,6 +28,7 @@ public sealed class PreparedAssembly
         Version = version;
         IsRouted = isRouted;
         NativeLibraryPaths = nativeLibraryPaths ?? Array.Empty<string>();
+        AssemblyVersion = assemblyVersion;
     }
 
     public string DllPath { get; }
@@ -40,6 +44,16 @@ public sealed class PreparedAssembly
     /// MSBuild copy-local output next to the managed DLL.
     /// </summary>
     public IReadOnlyList<string> NativeLibraryPaths { get; }
+
+    /// <summary>
+    /// The actual <c>AssemblyVersion</c> of the prepared assembly (read from
+    /// the source DLL's metadata). May differ from <see cref="Version"/> (the
+    /// NuGet package version): e.g. SkiaSharp 2.88.9 has
+    /// <c>AssemblyVersion</c> 2.88.0.0. Used to write the correct
+    /// <c>assemblyVersion</c> into <c>deps.json</c> so the CLR's TPA binder
+    /// matches the routed assembly by <c>(Name, Version)</c>.
+    /// </summary>
+    public string? AssemblyVersion { get; }
 }
 
 /// <summary>
@@ -181,6 +195,11 @@ public sealed class SwitchyardPipeline
         // given caller binds. Keyed by (packageId, version) so each routed
         // managed version rewrites its DllImports to its own native lib name.
         var nativeRedirectionsByRoutedName = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+        // routed managed name -> the routed assembly's ACTUAL AssemblyVersion
+        // (read from the DLL metadata, may differ from the package version, e.g.
+        // SkiaSharp 2.88.9 -> 2.88.0.0). Used to sync the caller's
+        // AssemblyReference.Version so the CLR binds by (Name, Version).
+        var routedNameToAssemblyVersion = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var cfg in configurations)
         {
             foreach (var version in cfg.GetAllTargetVersions())
@@ -200,12 +219,18 @@ public sealed class SwitchyardPipeline
                 var outDll = Path.Combine(_intermediateDir, routedName + ".dll");
                 AssemblyWeaver.PrepareAndRename(sourceDll, routedName, outDll);
 
-                // Discover and rename the native libraries this package ships
-                // (under runtimes/{rid}/native/). Each routed managed version
-                // gets its own renamed native file, and the routed managed
-                // assembly's own DllImport entries are repointed at that
-                // renamed native name so P/Invoke binds to the version-specific
-                // native lib instead of a single shared one.
+                // The routed assembly keeps its original AssemblyVersion (e.g.
+                // SkiaSharp 2.88.9 -> AssemblyVersion 2.88.0.0). Capture it from
+                // the source DLL so the deps.json patcher writes the version the
+                // CLR will actually bind against, not the NuGet package version.
+                var assemblyVersion = ReadAssemblyVersion(sourceDll);
+                if (assemblyVersion is not null)
+                    routedNameToAssemblyVersion[routedName] = assemblyVersion;
+
+                // Discover and rename the native libraries for this routed
+                // managed version, and rewrite its own DllImport entries to point
+                // at the renamed native names so P/Invoke binds to the
+                // version-specific native lib instead of a single shared one.
                 var nativePaths = PrepareNativeLibraries(
                     packageDir, routedName, version, outDll,
                     nativeRedirectionsByRoutedName, removedOriginalNatives, callerPaths);
@@ -217,7 +242,8 @@ public sealed class SwitchyardPipeline
                     cfg.PackageId,
                     version,
                     true,
-                    nativePaths));
+                    nativePaths,
+                    assemblyVersion));
 
                 var originalDll = FindOriginalCopyLocalDll(callerPaths, cfg.PackageId);
                 if (originalDll is not null)
@@ -247,8 +273,22 @@ public sealed class SwitchyardPipeline
                         continue;
 
                     var nativeRedirs = nativeRedirectionsByRoutedName.TryGetValue(routedName, out var nd) ? nd : null;
+
+                    // Sync the routed target's internal references to the actual
+                    // AssemblyVersion of the other group members (read from their
+                    // DLL metadata) so the CLR binds them by (Name, Version).
+                    var versionOverrides = new Dictionary<string, Version>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var kv in redirections)
+                    {
+                        if (routedNameToAssemblyVersion.TryGetValue(kv.Value, out var asmVer)
+                            && Version.TryParse(asmVer, out var actualVer))
+                        {
+                            versionOverrides[kv.Key] = actualVer;
+                        }
+                    }
+
                     var tempPath = Path.Combine(_intermediateDir, routedName + ".tmp.dll");
-                    ReferenceRedirector.RedirectReferences(dllPath, redirections, tempPath, nativeRedirs);
+                    ReferenceRedirector.RedirectReferences(dllPath, redirections, tempPath, nativeRedirs, versionOverrides);
                     if (File.Exists(tempPath))
                     {
                         File.Delete(dllPath);
@@ -282,6 +322,11 @@ public sealed class SwitchyardPipeline
             System.Diagnostics.Debug.WriteLine($"Switchyard: examining caller {callerName} at {callerPath}");
 
             var redirections = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // original package name -> routed assembly's actual AssemblyVersion,
+            // so RedirectReferences syncs the caller's reference version to the
+            // version the routed DLL carries (which may differ from the package
+            // version the routed-name suffix encodes).
+            var callerVersionOverrides = new Dictionary<string, Version>(StringComparer.OrdinalIgnoreCase);
             // Aggregate native redirections across every package this caller is
             // routed to, so a caller that P/Invokes several routed native libs
             // gets all of them rewritten.
@@ -297,6 +342,15 @@ public sealed class SwitchyardPipeline
 
                 if (routedName != cfg.PackageId)
                     redirections[cfg.PackageId] = routedName;
+
+                // Prefer the routed assembly's actual AssemblyVersion (read from
+                // the DLL metadata). Fall back to the version parsed from the
+                // routed-name suffix (package version) when it was not captured.
+                if (routedNameToAssemblyVersion.TryGetValue(routedName, out var asmVer)
+                    && Version.TryParse(asmVer, out var actualVer))
+                {
+                    callerVersionOverrides[cfg.PackageId] = actualVer;
+                }
 
                 if (nativeRedirectionsByRoutedName.TryGetValue(routedName, out var nativeMap))
                 {
@@ -319,7 +373,8 @@ public sealed class SwitchyardPipeline
 
             var callerFileName = Path.GetFileName(callerPath);
             var outPath = Path.Combine(_intermediateDir, callerFileName);
-            ReferenceRedirector.RedirectReferences(callerPath, redirections, outPath, callerNativeRedirs);
+            ReferenceRedirector.RedirectReferences(
+                callerPath, redirections, outPath, callerNativeRedirs, callerVersionOverrides);
 
             var outPdb = Path.ChangeExtension(outPath, ".pdb");
             redirectedCallers.Add(new RedirectedCaller(
@@ -342,23 +397,59 @@ public sealed class SwitchyardPipeline
     }
 
     /// <summary>
-    /// Locates, renames and copies the native libraries a routed package ships
-    /// into the intermediate directory so each routed managed version binds
-    /// its own native library. Also rewrites the routed managed assembly's own
-    /// <c>DllImport</c> entries to point at the renamed native names. Records the
-    /// original->routed native-name map for the given routed managed assembly and
-    /// notes the original native paths that should be stripped from the
-    /// copy-local output.
+    /// Reads the <c>AssemblyVersion</c> of the assembly at
+    /// <paramref name="assemblyPath"/> without executing any of its code, so
+    /// the deps.json patcher can write the version the CLR will actually bind
+    /// against (which may differ from the NuGet package version — e.g. SkiaSharp
+    /// 2.88.9 has AssemblyVersion 2.88.0.0).
+    /// </summary>
+    private static string? ReadAssemblyVersion(string assemblyPath)
+    {
+        try
+        {
+            var module = ModuleDefinition.FromFile(assemblyPath, new ModuleReaderParameters
+            {
+                PEReaderParameters = new AsmResolver.PE.PEReaderParameters(),
+            });
+            return module.Assembly?.Version?.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Locates, renames and copies the native libraries for a routed managed
+    /// version so each routed version binds its own native library. Also
+    /// rewrites the routed managed assembly's own <c>DllImport</c> entries to
+    /// point at the renamed native names. Records the original->routed
+    /// native-name map for the given routed managed assembly and notes the
+    /// original native paths that should be stripped from the copy-local output.
     /// </summary>
     /// <remarks>
-    /// Native libraries are discovered under <c>runtimes/{rid}/native/</c>.
-    /// The runtime identifier is derived from the current process so the build
-    /// picks the native file that will actually be loaded on the target OS/arch.
-    /// The DllImport module name is the bare name without extension and without
-    /// the <c>lib</c> prefix used on Linux/macOS; the renamed native file
-    /// preserves the platform prefix/suffix so the OS loader still finds it
-    /// (e.g. <c>libskiasharp.so</c> -> <c>libskiasharp.Switchyard.2.88.0.so</c>,
-    /// DllImport <c>skiasharp</c> -> <c>skiasharp.Switchyard.2.88.0</c>).
+    /// Native libraries are searched in two places, because real packages
+    /// split the native dependency across a separate "native assets" package
+    /// (e.g. <c>SkiaSharp</c> ships its <c>libskiasharp</c> via the transitive
+    /// <c>SkiaSharp.NativeAssets.Win32</c> / <c>.Linux</c> / <c>.macOS</c>
+    /// packages, not inside the <c>SkiaSharp</c> package itself):
+    /// <list type="bullet">
+    /// <item>The routed package's own <c>runtimes/{rid}/native/</c> (covers
+    /// packages that bundle their native lib).</item>
+    /// <item>The routed package's native-asset dependency packages, discovered
+    /// by parsing the routed package's <c>.nuspec</c> and resolving each
+    /// declared dependency at its declared version. A dependency is treated as a
+    /// native-asset provider when it actually contains a
+    /// <c>runtimes/{rid}/native/</c> folder.</item>
+    /// </list>
+    /// The .NET runtime does NOT add a <c>lib</c> prefix when resolving a
+    /// DllImport, so the import name must already match the on-disk file basename
+    /// (minus extension). The DllImport name is matched case-insensitively
+    /// against the native file basenames (SkiaSharp declares
+    /// <c>libskiasharp</c> but ships <c>libSkiaSharp.dll</c>; the Windows loader
+    /// is case-insensitive, so the binding works either way). The renamed file
+    /// preserves the on-disk casing so it still resolves on case-sensitive OSes;
+    /// the DllImport is rewritten to the metadata name's routed form.
     /// </remarks>
     private List<string> PrepareNativeLibraries(
         string packageDir,
@@ -371,45 +462,76 @@ public sealed class SwitchyardPipeline
     {
         var nativePaths = new List<string>();
         var rid = GetCurrentRuntimeIdentifier();
-        var nativeDir = Path.Combine(packageDir, "runtimes", rid, "native");
-        if (!Directory.Exists(nativeDir))
-            return nativePaths;
 
         // Only rewrite native libs actually referenced via DllImport by the
-        // managed assembly, to avoid renaming unrelated native assets.
-        var pinvokeNames = ReferenceRedirector.GetPInvokeModuleNames(managedDllPath);
-        var nativeMap = new Dictionary<string, string>(StringComparer.Ordinal);
-        bool isWindows = OperatingSystem.IsWindows();
+        // managed assembly, to avoid renaming unrelated native assets. Compared
+        // case-insensitively: the DllImport name in metadata and the on-disk
+        // native file name may differ in casing.
+        var pinvokeNames = new HashSet<string>(
+            ReferenceRedirector.GetPInvokeModuleNames(managedDllPath),
+            StringComparer.OrdinalIgnoreCase);
+        if (pinvokeNames.Count == 0)
+            return nativePaths;
 
-        foreach (var nativeFile in Directory.EnumerateFiles(nativeDir))
+        // Collect every directory that might hold the routed version's native
+        // libraries: the routed package's own runtimes folder, plus the native
+        // runtimes folders of its native-asset dependency packages.
+        var seenDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var nativeDirs = new List<string>();
+        var ownNativeDir = Path.Combine(packageDir, "runtimes", rid, "native");
+        if (Directory.Exists(ownNativeDir))
         {
-            var fileName = Path.GetFileName(nativeFile);
-            var ext = Path.GetExtension(fileName);
-            var fileNameNoExt = Path.GetFileNameWithoutExtension(fileName);
+            nativeDirs.Add(ownNativeDir);
+            seenDirs.Add(ownNativeDir);
+        }
 
-            // The DllImport module name is the bare name: no extension, and on
-            // non-Windows no leading "lib" prefix (the loader adds it).
-            bool libPrefixed = !isWindows && fileNameNoExt.StartsWith("lib", StringComparison.Ordinal);
-            string pinvokeName = libPrefixed ? fileNameNoExt.Substring(3) : fileNameNoExt;
+        foreach (var depDir in ResolveNativeAssetDirs(packageDir, rid))
+        {
+            if (seenDirs.Add(depDir))
+                nativeDirs.Add(depDir);
+        }
 
-            if (!pinvokeNames.Contains(pinvokeName))
+        var nativeMap = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var nativeDir in nativeDirs)
+        {
+            if (!Directory.Exists(nativeDir))
                 continue;
 
-            // Routed DllImport target name (bare) and the matching on-disk file
-            // name (with platform prefix + extension preserved).
-            string routedBase = pinvokeName + ".Switchyard." + version;
-            string routedFileName = (libPrefixed ? "lib" : "") + routedBase + ext;
-            var outNative = Path.Combine(_intermediateDir, routedFileName);
-            File.Copy(nativeFile, outNative, overwrite: true);
-            nativePaths.Add(outNative);
+            foreach (var nativeFile in Directory.EnumerateFiles(nativeDir))
+            {
+                var fileName = Path.GetFileName(nativeFile);
+                var ext = Path.GetExtension(fileName);
+                string fileBase = Path.GetFileNameWithoutExtension(fileName);
 
-            nativeMap[pinvokeName] = routedBase;
+                if (!pinvokeNames.Contains(fileBase))
+                    continue;
 
-            // Remember the original native path (as MSBuild would copy it
-            // under runtimes/{rid}/native/) so the publish cleanup can strip it.
-            var originalCopy = FindOriginalCopyLocalNative(callerPaths, fileName);
-            if (originalCopy is not null)
-                removedOriginalNatives.Add(originalCopy);
+                // Resolve the exact DllImport name the metadata uses (may differ
+                // in casing from the on-disk file, e.g. "libskiasharp" vs
+                // "libSkiaSharp"). The rewrite must target the metadata name so
+                // RewritePInvokeModules can match the ModuleRef.
+                string dllImportName = pinvokeNames.First(p =>
+                    string.Equals(p, fileBase, StringComparison.OrdinalIgnoreCase));
+
+                // Routed DllImport target name (metadata casing) and the matching
+                // on-disk file name (on-disk casing, version-suffixed).
+                string routedBase = dllImportName + ".Switchyard." + version;
+                string routedFileName = fileBase + ".Switchyard." + version + ext;
+                var outNative = Path.Combine(_intermediateDir, routedFileName);
+                File.Copy(nativeFile, outNative, overwrite: true);
+                nativePaths.Add(outNative);
+
+                nativeMap[dllImportName] = routedBase;
+
+                // Remember the original native path (as MSBuild would copy it
+                // under runtimes/{rid}/native/) so the publish cleanup can strip
+                // it. Match by filename so it works whether the native came from
+                // the routed package itself or a native-asset dependency.
+                var originalCopy = FindOriginalCopyLocalNative(callerPaths, fileName);
+                if (originalCopy is not null)
+                    removedOriginalNatives.Add(originalCopy);
+            }
         }
 
         if (nativeMap.Count == 0)
@@ -424,6 +546,79 @@ public sealed class SwitchyardPipeline
         RewritePInvokeInPlace(managedDllPath, nativeMap);
 
         return nativePaths;
+    }
+
+    /// <summary>
+    /// Parses the <c>.nuspec</c> of the routed package at <paramref name="packageDir"/>
+    /// and returns the on-disk <c>runtimes/{rid}/native/</c> directories of every
+    /// declared dependency that actually ships a native runtime folder for the
+    /// host RID. This is how Switchyard follows the full dependency chain to
+    /// find native libraries that live in a separate "native assets" package
+    /// (e.g. <c>SkiaSharp.NativeAssets.Win32</c> for <c>SkiaSharp</c>), instead of
+    /// forcing the user to route the native-assets package explicitly.
+    /// </summary>
+    private IEnumerable<string> ResolveNativeAssetDirs(string packageDir, string rid)
+    {
+        string packageId = Path.GetFileName(packageDir); // global cache folder is the id
+        string nuspecPath = Path.Combine(packageDir, packageId.ToLowerInvariant() + ".nuspec");
+        if (!File.Exists(nuspecPath))
+        {
+            // Fallback: some layouts name the nuspec by the exact id casing.
+            string? found = Directory.EnumerateFiles(packageDir, "*.nuspec").FirstOrDefault();
+            if (found is null)
+                yield break;
+            nuspecPath = found;
+        }
+
+        IEnumerable<(string Id, string Version)> deps;
+        try
+        {
+            deps = ReadNuspecDependencies(nuspecPath);
+        }
+        catch
+        {
+            yield break;
+        }
+
+        foreach (var (depId, depVersion) in deps)
+        {
+            if (string.IsNullOrWhiteSpace(depId) || string.IsNullOrWhiteSpace(depVersion))
+                continue;
+
+            string depDir;
+            try
+            {
+                depDir = _resolver.EnsurePackageAvailableAsync(depId, depVersion).GetAwaiter().GetResult();
+            }
+            catch
+            {
+                // A transitive native-assets package that can't be resolved is
+                // skipped rather than failing the whole build.
+                continue;
+            }
+
+            var depNativeDir = Path.Combine(depDir, "runtimes", rid, "native");
+            if (Directory.Exists(depNativeDir))
+                yield return depNativeDir;
+        }
+    }
+
+    /// <summary>
+    /// Extracts every <c>&lt;dependency id=... version=.../&gt;</c> entry from a
+    /// nuspec, across all dependency groups. Returns distinct (id, version)
+    /// pairs.
+    /// </summary>
+    private static IEnumerable<(string Id, string Version)> ReadNuspecDependencies(string nuspecPath)
+    {
+        var doc = System.Xml.Linq.XDocument.Load(nuspecPath);
+        // nuspec uses a default namespace; match dependency elements by local name.
+        foreach (var dep in doc.Descendants().Where(e => e.Name.LocalName == "dependency"))
+        {
+            var id = dep.Attribute("id")?.Value;
+            var ver = dep.Attribute("version")?.Value;
+            if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(ver))
+                yield return (id, ver);
+        }
     }
 
     /// <summary>

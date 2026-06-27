@@ -38,7 +38,8 @@ test/
       BasicRouteApp/              # dual-version diversion (+ PaymentModule)
       RouteGroupApp/              # cascade sandbox
       InvalidCastApp/             # boundary tearing (+ BoundaryBreaker)
-      NativeBindingApp/           # managed+native isolation (+ NativeConsumerModule)
+      NativeBindingApp/           # managed+native isolation, stub fixture (+ NativeConsumerModule)
+      SkiaSharpIsolationApp/      # real Avalonia+SkiaSharp scenario (+ SkiaSharpConsumerModule)
       ReflectionProbeApp/         # runtime-reflection dual-version probe
   fixtures/                       # TargetLib / CommonUtils / NativeBindingLib
       TargetLib/               # packed at 1.0.0 / 2.0.0 / 3.5.0
@@ -130,13 +131,43 @@ The `DllImport` target lives inside the routed package's own managed assembly
 (not in its callers), so the native-name rewrite must be applied to the
 **prepared target assembly** after `PrepareAndRename`, not only to callers.
 `SwitchyardPipeline.PrepareNativeLibraries` discovers native libs under
-`runtimes/{rid}/native/` for the host RID, derives the bare `DllImport` module
-name (strip extension; strip the `lib` prefix on Linux/macOS), renames the file
-to `{name}.Switchyard.{version}.{ext}` preserving the platform prefix/suffix,
-and rewrites the routed assembly's `ModuleRef` rows via
-`ReferenceRedirector.RewritePInvokeModules`. The original native libs are
-stripped from the copy-local stream (and from publish) via
-`SwitchyardPublishFilterTask.BlockedNativeFileNames`.
+`runtimes/{rid}/native/` for the host RID, derives the `DllImport` module name
+(the file basename without extension — .NET does NOT add a `lib` prefix on
+resolve, so the import name already matches the file basename, e.g.
+SkiaSharp's `libSkiaSharp`), renames the file to
+`{name}.Switchyard.{version}.{ext}` preserving on-disk casing, and rewrites
+the routed assembly's `ModuleRef` rows via
+`ReferenceRedirector.RewritePInvokeModules`.
+
+Real packages split their native dependency across a separate "native assets"
+package (SkiaSharp ships `libskiasharp` via the transitive
+`SkiaSharp.NativeAssets.Win32` / `.Linux` / `.macOS` packages, not inside the
+`SkiaSharp` package). Switchyard follows the full dependency chain
+automatically: it parses the routed package's `.nuspec`, resolves each declared
+dependency at its declared version, and treats any dependency that actually
+contains a `runtimes/{rid}/native/` folder as a native-asset provider. The user
+routes only the managed package (e.g. `SkiaSharp`); the native-asset packages
+are discovered and isolated without extra configuration.
+
+The original native libs are stripped from the copy-local stream (and from
+publish) via `SwitchyardPublishFilterTask.BlockedNativeFileNames`.
+
+### AssemblyVersion vs package version
+
+The routed assembly's actual `AssemblyVersion` may differ from the NuGet
+package version the routed name encodes (SkiaSharp 2.88.9 has `AssemblyVersion`
+2.88.0.0). Two places must use the **actual** `AssemblyVersion`, read from the
+DLL metadata via `SwitchyardPipeline.ReadAssemblyVersion`:
+
+* `ReferenceRedirector.RedirectReferences` syncs the caller's
+  `AssemblyReference.Version` to it (via `assemblyVersionOverrides`), so the CLR
+  binds the routed assembly by `(Name, Version, PublicKey)`.
+* `DepsJsonPatcher.AddRoutedAssemblies` writes it as `assemblyVersion` /
+  `fileVersion` in the synthetic `deps.json` runtime entry, so `hostpolicy`
+  records a TPA entry the binder can match.
+
+Leaving the package version in either place makes the loader fail with
+`FileNotFoundException` for a version that does not exist on disk.
 
 ---
 
@@ -237,11 +268,21 @@ Covers the three core algorithms:
   `obj/switchyard/*.dll`. **Do not remove the collection attribute.**
 * `PipelineInterceptTests` (Level 2): bin/publish interception, incremental
   build, RouteGroup cascade deep-inspection.
-* `NativeBindingTests` (Level 2 + 3): the Avalonia + higher-SkiaSharp-style
-  managed+native scenario. Asserts the renamed managed + native assemblies
-  land in `bin`, the original native lib is blocked, the routed managed DLL's
-  `DllImport` module name was rewritten, and the compiled exe reports distinct
-  native version constants per routed version (true native isolation).
+* `NativeBindingTests` (Level 2 + 3): the managed+native scenario at a small,
+  deterministic, offline scale using the `NativeBindingLib` stub fixture
+  (managed DllImport + a tiny native lib built from `native.c`). Asserts the
+  renamed managed + native assemblies land in `bin`, the original native lib
+  is blocked, the routed managed DLL's `DllImport` module name was rewritten,
+  and the compiled exe reports distinct native version constants per routed
+  version.
+* `SkiaSharpIsolationTests` (Level 2 + 3): the **real** Avalonia +
+  higher-SkiaSharp scenario, using the actual SkiaSharp NuGet packages (managed
+  assembly + native `libskiasharp` shipped via the transitive
+  `SkiaSharp.NativeAssets.*` packages). Asserts the renamed managed + native
+  assemblies land in `bin`, the routed managed DLL's DllImport was rewritten,
+  and the compiled exe successfully loads BOTH native libraries in one process
+  (each routed version reports its distinct SkiaSharp version). This is the
+  concrete situation Switchyard was built for.
 * `ReflectionProbeTests` (Level 3): `ReflectionProbeApp` loads both routed
   DLLs via `Assembly.LoadFrom` + reflection (no compile-time reference to a
   specific routed version) and reports the two distinct versions.
@@ -259,6 +300,8 @@ Covers the three core algorithms:
 * native-lib isolation — `NativeBindingApp` asserts each routed managed
   version binds its own renamed native library (distinct native version
   constants), proving native isolation rather than a single shared native load.
+* real SkiaSharp coexistence — `SkiaSharpIsolationApp` proves two real
+  SkiaSharp versions (managed + native `libskiasharp`) coexist in one process.
 
 ### Local prerequisites for integration tests
 

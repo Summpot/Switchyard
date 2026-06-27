@@ -270,6 +270,10 @@ public sealed class SwitchyardTask : Task
             item.SetMetadata("RoutedName", Path.GetFileNameWithoutExtension(prepared.DllPath));
             item.SetMetadata("RoutedVersion", prepared.Version);
             item.SetMetadata("RoutedFileName", Path.GetFileName(prepared.DllPath));
+            // The actual AssemblyVersion (may differ from the package version).
+            // Used by the deps.json patcher so the CLR binds the routed assembly
+            // by (Name, Version) correctly.
+            item.SetMetadata("RoutedAssemblyVersion", prepared.AssemblyVersion ?? prepared.Version);
             items.Add(item);
         }
         return items.ToArray();

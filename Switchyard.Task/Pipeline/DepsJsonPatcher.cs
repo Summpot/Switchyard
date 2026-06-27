@@ -53,7 +53,8 @@ public static class DepsJsonPatcher
             routedAssemblies.Where(a => a.IsRouted)
                             .Select(a => (RoutedName: Path.GetFileNameWithoutExtension(a.DllPath),
                                           Version: a.Version,
-                                          FileName: Path.GetFileName(a.DllPath))));
+                                          FileName: Path.GetFileName(a.DllPath),
+                                          AssemblyVersion: a.AssemblyVersion ?? a.Version)));
     }
 
     /// <summary>
@@ -62,9 +63,16 @@ public static class DepsJsonPatcher
     /// file is rewritten in place. Returns the number of entries added, or
     /// <c>-1</c> when the file could not be read or parsed.
     /// </summary>
+    /// <param name="routedAssemblies">Each tuple carries the routed simple
+    /// name, the NuGet package version (used as the library key), the on-disk
+    /// file name, and the routed assembly's actual
+    /// <c>AssemblyVersion</c> (used as <c>assemblyVersion</c>/<c>fileVersion</c>
+    /// so the CLR binds the routed assembly by <c>(Name, Version)</c> — this
+    /// may differ from the package version, e.g. SkiaSharp 2.88.9 has
+    /// <c>AssemblyVersion</c> 2.88.0.0).</param>
     public static int AddRoutedAssemblies(
         string depsFilePath,
-        IEnumerable<(string RoutedName, string Version, string FileName)> routedAssemblies)
+        IEnumerable<(string RoutedName, string Version, string FileName, string AssemblyVersion)> routedAssemblies)
     {
         if (!File.Exists(depsFilePath))
             return -1;
@@ -115,17 +123,23 @@ public static class DepsJsonPatcher
         // dependency edges stay valid) prevents that copy and also drops the
         // original from the TPA list.
         var originalPackageIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (routedName, _, _) in routed)
+        foreach (var (routedName, _, _, _) in routed)
         {
             string? originalId = StripRoutedSuffix(routedName);
             if (originalId is not null)
                 originalPackageIds.Add(originalId);
         }
 
-        foreach (var (routedName, version, fileName) in routed)
+        foreach (var (routedName, version, fileName, assemblyVersionRaw) in routed)
         {
             string libKey = routedName + "/" + version;
-            string assemblyVersion = NormaliseVersion(version);
+            // Use the routed assembly's ACTUAL AssemblyVersion (read from the
+            // DLL metadata), not the NuGet package version — the CLR binds on
+            // (Name, Version) and the on-disk file carries its own
+            // AssemblyVersion (e.g. SkiaSharp 2.88.9 -> 2.88.0.0). Writing the
+            // package version here would make hostpolicy record a TPA entry the
+            // binder cannot match.
+            string assemblyVersion = NormaliseVersion(assemblyVersionRaw);
 
             // targets[tfm][libKey] = { "runtime": { fileName: { assemblyVersion, fileVersion } } }
             if (!targetFrame.TryGetPropertyValue(libKey, out var libTargetNode) || libTargetNode is not JsonObject libTarget)

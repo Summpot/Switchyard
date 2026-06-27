@@ -196,7 +196,7 @@ public static class BuildUtility
                 ?? throw new InvalidOperationException(
                     "Could not locate the MSVC dev environment (vcvars64.bat) via vswhere. " +
                     "Visual Studio with the C++ workload is required to build the native fixture on Windows.");
-            string outDll = Path.Combine(nativeOutDir, "nativebinding.dll");
+            string outDll = Path.Combine(nativeOutDir, "libnativebinding.dll");
             string objFile = Path.Combine(nativeOutDir, "native.obj");
             string batPath = Path.Combine(nativeOutDir, "_build_native.bat");
             File.WriteAllText(batPath,

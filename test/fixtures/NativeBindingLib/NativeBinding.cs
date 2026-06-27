@@ -12,10 +12,14 @@ namespace NativeBindingLib;
 /// </summary>
 public static class NativeBinding
 {
-    // The DllImport target is the bare native module name. Switchyard rewrites
-    // this to "nativebinding.Switchyard.{version}" and ships a renamed native
-    // file alongside, so each routed managed version binds its own native lib.
-    [DllImport("nativebinding", CallingConvention = CallingConvention.Cdecl)]
+    // The DllImport target mirrors SkiaSharp's convention: the import name is
+    // the full native file basename (including the "lib" prefix on every
+    // platform), because .NET does not add a "lib" prefix when resolving. The
+    // native files are libnativebinding.dll / libnativebinding.so /
+    // libnativebinding.dylib. Switchyard rewrites this to
+    // "libnativebinding.Switchyard.{version}" and ships a renamed native file
+    // per routed version, so each routed managed version binds its own native.
+    [DllImport("libnativebinding", CallingConvention = CallingConvention.Cdecl)]
     private static extern int native_get_version();
 
     public static string GetVersion()

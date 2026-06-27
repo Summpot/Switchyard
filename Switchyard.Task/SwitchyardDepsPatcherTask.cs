@@ -42,7 +42,8 @@ public sealed class SwitchyardDepsPatcherTask : Task
             .Select(i => (
                 RoutedName: i.GetMetadata("RoutedName"),
                 Version: i.GetMetadata("RoutedVersion"),
-                FileName: i.GetMetadata("RoutedFileName")))
+                FileName: i.GetMetadata("RoutedFileName"),
+                AssemblyVersion: i.GetMetadata("RoutedAssemblyVersion")))
             .ToList();
 
         if (tuples.Count == 0)

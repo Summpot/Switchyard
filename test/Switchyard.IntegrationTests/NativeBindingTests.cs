@@ -40,8 +40,10 @@ public class NativeBindingTests
         Assert.True(File.Exists(routed35), $"Expected {routed35}");
 
         // The renamed native libraries must be present (one per routed version).
-        string nativeName1 = NativeLibName("nativebinding.Switchyard.1.0.0");
-        string nativeName35 = NativeLibName("nativebinding.Switchyard.3.5.0");
+        // The native basename is "libnativebinding" (lib prefix on every
+        // platform, mirroring SkiaSharp's libskiasharp convention).
+        string nativeName1 = NativeLibName("libnativebinding.Switchyard.1.0.0");
+        string nativeName35 = NativeLibName("libnativebinding.Switchyard.3.5.0");
         Assert.True(File.Exists(Path.Combine(binDir, nativeName1)), $"Expected renamed native {nativeName1}");
         Assert.True(File.Exists(Path.Combine(binDir, nativeName35)), $"Expected renamed native {nativeName35}");
 
@@ -51,7 +53,7 @@ public class NativeBindingTests
 
         // The original native library must NOT be present in bin (only the
         // renamed per-version copies are shipped).
-        string origNative = NativeLibName("nativebinding");
+        string origNative = NativeLibName("libnativebinding");
         Assert.False(File.Exists(Path.Combine(binDir, origNative)),
             $"Original native {origNative} must be blocked from bin");
     }
@@ -70,11 +72,11 @@ public class NativeBindingTests
 
         // Deep-inspect the routed managed DLL and assert its DllImport module
         // (ModuleRef) now points at the routed native name, not the original
-        // "nativebinding". This is the actual native-isolation mechanism.
+        // "libnativebinding". This is the actual native-isolation mechanism.
         var module = ModuleDefinition.FromFile(routed1);
         var moduleRefs = module.ModuleReferences.Select(r => r.Name?.Value).ToList();
-        Assert.Contains("nativebinding.Switchyard.1.0.0", moduleRefs);
-        Assert.DoesNotContain("nativebinding", moduleRefs);
+        Assert.Contains("libnativebinding.Switchyard.1.0.0", moduleRefs);
+        Assert.DoesNotContain("libnativebinding", moduleRefs);
     }
 
     [Fact]
@@ -103,8 +105,10 @@ public class NativeBindingTests
 
     private static string NativeLibName(string baseName)
     {
+        // baseName already carries the "lib" prefix on every platform
+        // (mirroring SkiaSharp's libskiasharp), so only the extension differs.
         if (OperatingSystem.IsWindows()) return baseName + ".dll";
-        if (OperatingSystem.IsMacOS()) return "lib" + baseName + ".dylib";
-        return "lib" + baseName + ".so";
+        if (OperatingSystem.IsMacOS()) return baseName + ".dylib";
+        return baseName + ".so";
     }
 }

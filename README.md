@@ -119,21 +119,27 @@ is exactly what the `InvalidCastApp` test sample proves (see
 ## Native library isolation
 
 Packages that ship a native dependency (e.g. **SkiaSharp**, the original
-motivation for Switchyard) are handled automatically. When a routed package
-contains a native library under `runtimes/{rid}/native/` that the managed
-assembly `DllImport`s, Switchyard:
+motivation for Switchyard) are handled automatically — **including the common
+case where the native library lives in a separate "native assets" package**.
+When you route `SkiaSharp`, Switchyard follows the full dependency chain:
 
-* renames the native file to `{native}.Switchyard.{version}.{ext}` (preserving
-  the platform `lib` prefix / extension so the OS loader still finds it),
-* rewrites the routed managed assembly's own `DllImport` module name to the
-  renamed native name,
-* ships one renamed native library per routed version.
+* it parses `SkiaSharp`'s `.nuspec` and resolves each transitive dependency;
+* any dependency that actually contains a `runtimes/{rid}/native/` folder
+  (SkiaSharp ships `libskiasharp` via the transitive
+  `SkiaSharp.NativeAssets.Win32` / `.Linux` / `.macOS` packages) is treated as
+  the native-asset provider;
+* for each routed version it renames that native file to
+  `{native}.Switchyard.{version}.{ext}` and rewrites the routed managed
+  assembly's own `DllImport` module name to the renamed native name;
+* one renamed native library is shipped per routed version.
 
 So each routed managed version binds its **own** native library, and two
-versions of a native-binding package no longer fight over a single native load.
-This is what makes the "use Avalonia while pulling in a higher SkiaSharp
-elsewhere" scenario work: Avalonia keeps its SkiaSharp, your other code uses
-the newer one, and the two `libskiasharp` copies coexist by name.
+versions of a native-binding package no longer fight over a single native
+load. You route only the managed package (`SkiaSharp`); the native-asset
+packages are discovered and isolated without extra configuration. This is what
+makes the "use Avalonia while pulling in a higher SkiaSharp elsewhere" scenario
+work: Avalonia keeps its SkiaSharp, your other code uses the newer one, and the
+two `libskiasharp` copies coexist by name.
 
 ## Known limitations
 

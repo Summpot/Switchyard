@@ -39,11 +39,22 @@ public static class ReferenceRedirector
     /// routed native name). May be <c>null</c> or empty for packages without
     /// a native dependency.
     /// </param>
+    /// <param name="assemblyVersionOverrides">
+    /// Optional map of original package name -> the routed assembly's ACTUAL
+    /// <c>AssemblyVersion</c> (read from the DLL metadata). When present, the
+    /// caller's <c>AssemblyReference.Version</c> is synced to this value instead
+    /// of the version parsed from the routed-name suffix, because the routed
+    /// DLL carries its own <c>AssemblyVersion</c> which may differ from the
+    /// NuGet package version the routed name encodes (e.g. SkiaSharp 2.88.9 has
+    /// <c>AssemblyVersion</c> 2.88.0.0). The CLR binds on
+    /// <c>(Name, Version, PublicKey)</c>, so this sync is mandatory.
+    /// </param>
     public static void RedirectReferences(
         string assemblyPath,
         IReadOnlyDictionary<string, string> redirections,
         string outputPath,
-        IReadOnlyDictionary<string, string>? nativeRedirections = null)
+        IReadOnlyDictionary<string, string>? nativeRedirections = null,
+        IReadOnlyDictionary<string, Version>? assemblyVersionOverrides = null)
     {
         if (redirections.Count == 0 && (nativeRedirections is null || nativeRedirections.Count == 0))
             return;
@@ -61,13 +72,22 @@ public static class ReferenceRedirector
                 continue;
 
             reference.Name = routedName;
-            // The routed assembly carries the version of the package it was
-            // built from (e.g. TargetLib.Switchyard.1.0.0 has assembly version
-            // 1.0.0.0), not the original version the caller referenced. The
-            // CLR binds on (Name, Version, PublicKey), so the reference version
-            // must be updated to match — otherwise the loader fails with a
-            // FileNotFoundException for the old version number.
-            var routedVersion = ExtractRoutedVersion(routedName);
+            // Sync the reference version to the routed assembly's ACTUAL
+            // AssemblyVersion when known (read from the DLL metadata). Fall back
+            // to the version parsed from the routed-name suffix (the NuGet
+            // package version) when the actual version was not captured. The CLR
+            // binds on (Name, Version, PublicKey); leaving the old version makes
+            // the loader fail with a FileNotFoundException for the old version
+            // number. The version is padded to four components so AsmResolver
+            // serialises concrete 0s rather than the 0xFFFF "unspecified"
+            // sentinel (which the CLR reads back as 65535).
+            Version? routedVersion = null;
+            if (assemblyVersionOverrides is not null
+                && assemblyVersionOverrides.TryGetValue(name, out var actualVer))
+            {
+                routedVersion = PadToFourComponents(actualVer);
+            }
+            routedVersion ??= ExtractRoutedVersion(routedName);
             if (routedVersion is not null)
                 reference.Version = routedVersion;
             reference.PublicKeyOrToken = null;
@@ -220,12 +240,17 @@ public static class ReferenceRedirector
         string verStr = routedName.Substring(idx + suffix.Length);
         if (!Version.TryParse(verStr, out var v))
             return null;
-        int major = v.Major;
-        int minor = v.Minor < 0 ? 0 : v.Minor;
-        int build = v.Build < 0 ? 0 : v.Build;
-        int revision = v.Revision < 0 ? 0 : v.Revision;
-        return new Version(major, minor, build, revision);
+        return PadToFourComponents(v);
     }
+
+    /// <summary>
+    /// Pads a <see cref="Version"/> to a full four-component version (missing
+    /// fields become 0) so AsmResolver serialises concrete zeroes rather than
+    /// the 0xFFFF "unspecified" sentinel that the CLR would otherwise read
+    /// back as 65535 and fail to bind against.
+    /// </summary>
+    private static Version PadToFourComponents(Version v)
+        => new(v.Major, v.Minor < 0 ? 0 : v.Minor, v.Build < 0 ? 0 : v.Build, v.Revision < 0 ? 0 : v.Revision);
 
     /// <summary>
     /// Returns <c>true</c> when the supplied file is a .NET PE that AsmResolver
