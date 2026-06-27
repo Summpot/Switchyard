@@ -35,15 +35,6 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Display dotnet info
-        run: dotnet --info
-
-      - name: Verify native compiler
-        shell: pwsh
-        run: |
-          if ($IsWindows) { & cl 2>&1 | Out-Null; if ($LASTEXITCODE -ge 2) { Write-Output "cl not available" } else { Write-Output "cl OK" } }
-          else { gcc --version }
-
       # ---------------------------------------------------------------------------
       # Clean-cache contract: remove stale obj/bin trees and purge the test
       # stub packages from the global NuGet cache before running, so

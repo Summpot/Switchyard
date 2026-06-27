@@ -2,26 +2,39 @@
 
   <PropertyGroup Condition="'$(SwitchyardEnabled)' == 'true'">
     <SwitchyardTaskAssemblyDir Condition="'$(SwitchyardTaskAssemblyDir)' == ''">$(MSBuildThisFileDirectory)..\tasks\</SwitchyardTaskAssemblyDir>
+    <_SwitchyardCoreTaskTargetFramework Condition="'$(NETCoreSdkVersion)' != ''">net$([System.Text.RegularExpressions.Regex]::Match('$(NETCoreSdkVersion)', '^[0-9]+').Value).0</_SwitchyardCoreTaskTargetFramework>
+    <_SwitchyardPreferredCoreTaskAssembly Condition="'$(_SwitchyardCoreTaskTargetFramework)' != ''">$(SwitchyardTaskAssemblyDir)$(_SwitchyardCoreTaskTargetFramework)\Switchyard.Task.dll</_SwitchyardPreferredCoreTaskAssembly>
+  </PropertyGroup>
 
-    <SwitchyardTaskAssembly Condition="$(MSBuildRuntimeType) == 'Core'">$(SwitchyardTaskAssemblyDir)net8.0\Switchyard.Task.dll</SwitchyardTaskAssembly>
-    <SwitchyardTaskAssembly Condition="$(MSBuildRuntimeType) != 'Core'">$(SwitchyardTaskAssemblyDir)net472\Switchyard.Task.dll</SwitchyardTaskAssembly>
+  <ItemGroup Condition="'$(SwitchyardEnabled)' == 'true' And '$(SwitchyardTaskAssembly)' == ''">
+    <_SwitchyardTaskAssemblyCandidate Include="$(SwitchyardTaskAssemblyDir)*\Switchyard.Task.dll" />
+    <_SwitchyardFrameworkTaskAssemblyCandidate Include="@(_SwitchyardTaskAssemblyCandidate)"
+                                               Condition="'$([System.Text.RegularExpressions.Regex]::IsMatch('%(_SwitchyardTaskAssemblyCandidate.Identity)', '[\\/]net4[0-9]+[\\/]Switchyard\.Task\.dll$'))' == 'true'" />
+    <_SwitchyardCoreTaskAssemblyCandidate Include="@(_SwitchyardTaskAssemblyCandidate)"
+                                          Condition="'$([System.Text.RegularExpressions.Regex]::IsMatch('%(_SwitchyardTaskAssemblyCandidate.Identity)', '[\\/]net4[0-9]+[\\/]Switchyard\.Task\.dll$'))' != 'true'" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(SwitchyardEnabled)' == 'true' And '$(SwitchyardTaskAssembly)' == ''">
+    <SwitchyardTaskAssembly Condition="'$(MSBuildRuntimeType)' == 'Core' And Exists('$(_SwitchyardPreferredCoreTaskAssembly)')">$(_SwitchyardPreferredCoreTaskAssembly)</SwitchyardTaskAssembly>
+    <SwitchyardTaskAssembly Condition="'$(MSBuildRuntimeType)' == 'Core' And '$(SwitchyardTaskAssembly)' == ''">@(_SwitchyardCoreTaskAssemblyCandidate)</SwitchyardTaskAssembly>
+    <SwitchyardTaskAssembly Condition="'$(MSBuildRuntimeType)' != 'Core'">@(_SwitchyardFrameworkTaskAssemblyCandidate)</SwitchyardTaskAssembly>
   </PropertyGroup>
 
   <UsingTask TaskName="Switchyard.SwitchyardTask"
              AssemblyFile="$(SwitchyardTaskAssembly)"
-             Condition="'$(SwitchyardEnabled)' == 'true'" />
+             Condition="'$(SwitchyardEnabled)' == 'true' And '$(SwitchyardTaskAssembly)' != ''" />
 
   <UsingTask TaskName="Switchyard.SwitchyardDepsPatcherTask"
              AssemblyFile="$(SwitchyardTaskAssembly)"
-             Condition="'$(SwitchyardEnabled)' == 'true'" />
+             Condition="'$(SwitchyardEnabled)' == 'true' And '$(SwitchyardTaskAssembly)' != ''" />
 
   <UsingTask TaskName="Switchyard.SwitchyardPublishFilterTask"
              AssemblyFile="$(SwitchyardTaskAssembly)"
-             Condition="'$(SwitchyardEnabled)' == 'true'" />
+             Condition="'$(SwitchyardEnabled)' == 'true' And '$(SwitchyardTaskAssembly)' != ''" />
 
   <UsingTask TaskName="Switchyard.SwitchyardNativeAotDirectPInvokeFilterTask"
              AssemblyFile="$(SwitchyardTaskAssembly)"
-             Condition="'$(SwitchyardEnabled)' == 'true'" />
+             Condition="'$(SwitchyardEnabled)' == 'true' And '$(SwitchyardTaskAssembly)' != ''" />
 
   <!--
     Phase 1: weave/redirect.

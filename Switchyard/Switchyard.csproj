@@ -32,23 +32,54 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <_Net472TaskOutputPath>$(MSBuildThisFileDirectory)..\Switchyard.Task\bin\$(Configuration)\net472\</_Net472TaskOutputPath>
-    <_Net8TaskOutputPath>$(MSBuildThisFileDirectory)..\Switchyard.Task\bin\$(Configuration)\net8.0\</_Net8TaskOutputPath>
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);IncludeSwitchyardTaskOutputs</TargetsForTfmSpecificContentInPackage>
   </PropertyGroup>
 
-  <Target Name="IncludeSwitchyardTaskOutputs">
+  <Target Name="ResolveSwitchyardTaskTargetFrameworks">
+    <XmlPeek XmlInputPath="..\Switchyard.Task\Switchyard.Task.csproj"
+             Query="/Project/PropertyGroup/TargetFrameworks/text()">
+      <Output TaskParameter="Result"
+              PropertyName="_SwitchyardTaskTargetFrameworks" />
+    </XmlPeek>
+    <XmlPeek XmlInputPath="..\Switchyard.Task\Switchyard.Task.csproj"
+             Query="/Project/PropertyGroup/TargetFramework/text()"
+             Condition="'$(_SwitchyardTaskTargetFrameworks)' == ''">
+      <Output TaskParameter="Result"
+              PropertyName="_SwitchyardTaskTargetFrameworks" />
+    </XmlPeek>
+
     <ItemGroup>
-      <TfmSpecificPackageFile Include="$(_Net472TaskOutputPath)*.dll"
-                              PackagePath="tasks\net472\" />
-      <TfmSpecificPackageFile Include="$(_Net472TaskOutputPath)Switchyard.Task.pdb"
-                              PackagePath="tasks\net472\" />
-      <TfmSpecificPackageFile Include="$(_Net8TaskOutputPath)*.dll"
-                              PackagePath="tasks\net8.0\" />
-      <TfmSpecificPackageFile Include="$(_Net8TaskOutputPath)Switchyard.Task.pdb"
-                              PackagePath="tasks\net8.0\" />
-      <TfmSpecificPackageFile Include="$(_Net8TaskOutputPath)Switchyard.Task.deps.json"
-                              PackagePath="tasks\net8.0\" />
+      <_SwitchyardTaskTargetFramework Include="$([System.Text.RegularExpressions.Regex]::Split('$(_SwitchyardTaskTargetFrameworks)', ';'))" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="BuildSwitchyardTaskOutputsForPack"
+          DependsOnTargets="ResolveSwitchyardTaskTargetFrameworks"
+          BeforeTargets="IncludeSwitchyardTaskOutputs"
+          Condition="'$(NoBuild)' != 'true'">
+    <MSBuild Projects="..\Switchyard.Task\Switchyard.Task.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=%(_SwitchyardTaskTargetFramework.Identity)" />
+  </Target>
+
+  <Target Name="IncludeSwitchyardTaskOutputs"
+          DependsOnTargets="ResolveSwitchyardTaskTargetFrameworks">
+    <ItemGroup>
+      <_SwitchyardTaskPackageFile Include="$(MSBuildThisFileDirectory)..\Switchyard.Task\bin\$(Configuration)\%(_SwitchyardTaskTargetFramework.Identity)\*.dll"
+                                  Condition="Exists('$(MSBuildThisFileDirectory)..\Switchyard.Task\bin\$(Configuration)\%(_SwitchyardTaskTargetFramework.Identity)\')">
+        <TaskTargetFramework>%(_SwitchyardTaskTargetFramework.Identity)</TaskTargetFramework>
+      </_SwitchyardTaskPackageFile>
+      <_SwitchyardTaskPackageFile Include="$(MSBuildThisFileDirectory)..\Switchyard.Task\bin\$(Configuration)\%(_SwitchyardTaskTargetFramework.Identity)\Switchyard.Task.pdb"
+                                  Condition="Exists('$(MSBuildThisFileDirectory)..\Switchyard.Task\bin\$(Configuration)\%(_SwitchyardTaskTargetFramework.Identity)\Switchyard.Task.pdb')">
+        <TaskTargetFramework>%(_SwitchyardTaskTargetFramework.Identity)</TaskTargetFramework>
+      </_SwitchyardTaskPackageFile>
+      <_SwitchyardTaskPackageFile Include="$(MSBuildThisFileDirectory)..\Switchyard.Task\bin\$(Configuration)\%(_SwitchyardTaskTargetFramework.Identity)\Switchyard.Task.deps.json"
+                                  Condition="Exists('$(MSBuildThisFileDirectory)..\Switchyard.Task\bin\$(Configuration)\%(_SwitchyardTaskTargetFramework.Identity)\Switchyard.Task.deps.json')">
+        <TaskTargetFramework>%(_SwitchyardTaskTargetFramework.Identity)</TaskTargetFramework>
+      </_SwitchyardTaskPackageFile>
+
+      <TfmSpecificPackageFile Include="@(_SwitchyardTaskPackageFile)"
+                              PackagePath="tasks\%(_SwitchyardTaskPackageFile.TaskTargetFramework)\" />
     </ItemGroup>
   </Target>
 
