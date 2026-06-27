@@ -680,7 +680,7 @@ public sealed class SwitchyardPipeline
                 nativeDirs.Add(depDir);
         }
 
-        foreach (var depDir in ResolveNativeProviderAssetDirs(version, rid, pinvokeNames))
+        foreach (var depDir in ResolveNativeProviderAssetDirs(version, rid, pinvokeNames, callerPaths))
         {
             if (seenDirs.Add(depDir))
                 nativeDirs.Add(depDir);
@@ -928,10 +928,16 @@ public sealed class SwitchyardPipeline
     private IEnumerable<string> ResolveNativeProviderAssetDirs(
         string version,
         string rid,
-        ISet<string> pinvokeNames)
+        ISet<string> pinvokeNames,
+        IReadOnlyList<string> callerPaths)
     {
-        foreach (var nativePackageId in DiscoverNativeProviderPackageIds(rid, pinvokeNames))
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var nativePackageId in DiscoverNativeProviderPackageIdsFromCopyLocal(rid, pinvokeNames, callerPaths)
+                     .Concat(DiscoverNativeProviderPackageIds(rid, pinvokeNames)))
         {
+            if (!seen.Add(nativePackageId))
+                continue;
+
             string depDir;
             try
             {
@@ -945,6 +951,57 @@ public sealed class SwitchyardPipeline
             var depNativeDir = Path.Combine(depDir, "runtimes", rid, "native");
             if (Directory.Exists(depNativeDir))
                 yield return depNativeDir;
+        }
+    }
+
+    private IEnumerable<string> DiscoverNativeProviderPackageIdsFromCopyLocal(
+        string rid,
+        ISet<string> pinvokeNames,
+        IReadOnlyList<string> callerPaths)
+    {
+        var globalPackagesFolder = _resolver.GlobalPackagesFolder;
+        if (string.IsNullOrWhiteSpace(globalPackagesFolder))
+            yield break;
+
+        var packageRoot = EnsureTrailingSeparator(Path.GetFullPath(globalPackagesFolder));
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var callerPath in callerPaths)
+        {
+            if (string.IsNullOrWhiteSpace(callerPath)
+                || !pinvokeNames.Contains(Path.GetFileNameWithoutExtension(callerPath)))
+            {
+                continue;
+            }
+
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(callerPath);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (!fullPath.StartsWith(packageRoot, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var relative = fullPath.Substring(packageRoot.Length);
+            var segments = relative.Split(
+                new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                StringSplitOptions.RemoveEmptyEntries);
+            var runtimesIndex = Array.FindIndex(segments, s => string.Equals(s, "runtimes", StringComparison.OrdinalIgnoreCase));
+            if (runtimesIndex < 2
+                || runtimesIndex + 2 >= segments.Length
+                || !string.Equals(segments[runtimesIndex + 1], rid, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(segments[runtimesIndex + 2], "native", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var packageId = segments[runtimesIndex - 2];
+            if (seen.Add(packageId))
+                yield return packageId;
         }
     }
 
@@ -993,6 +1050,17 @@ public sealed class SwitchyardPipeline
         // Global packages are laid out as {root}/{packageId}/{version}. The
         // resolver hands us the version directory, so the id is its parent name.
         return Directory.GetParent(packageDir)?.Name ?? Path.GetFileName(packageDir);
+    }
+
+    private static string EnsureTrailingSeparator(string path)
+    {
+        if (path.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+            || path.EndsWith(Path.AltDirectorySeparatorChar.ToString(), StringComparison.Ordinal))
+        {
+            return path;
+        }
+
+        return path + Path.DirectorySeparatorChar;
     }
 
     /// <summary>
