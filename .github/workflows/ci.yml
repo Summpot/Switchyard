@@ -39,6 +39,23 @@ jobs:
         run: dotnet --info
 
       # ---------------------------------------------------------------------------
+      # Native build toolchain for the NativeBindingLib fixture (the Avalonia +
+      # higher-SkiaSharp-style scenario). On Windows the MSVC dev environment
+      # is initialised so cl.exe is on PATH; on Linux gcc is preinstalled on
+      # the ubuntu runner. The fixture itself is built at test time by
+      # BuildUtility from test/fixtures/NativeBindingLib/native.c.
+      # ---------------------------------------------------------------------------
+      - name: Setup MSVC dev environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Verify native compiler
+        shell: pwsh
+        run: |
+          if ($IsWindows) { & cl 2>&1 | Out-Null; if ($LASTEXITCODE -ge 2) { Write-Output "cl not available" } else { Write-Output "cl OK" } }
+          else { gcc --version }
+
+      # ---------------------------------------------------------------------------
       # Clean-cache contract: remove stale obj/bin trees and purge the test
       # stub packages from the global NuGet cache before running, so
       # NuGet.Protocol is forced to fetch and re-resolve on every run instead
@@ -57,7 +74,7 @@ jobs:
         shell: pwsh
         run: |
           $pkgRoot = Join-Path $env:USERPROFILE '.nuget' 'packages'
-          foreach ($id in 'switchyard','targetlib','commonutils') {
+          foreach ($id in 'switchyard','targetlib','commonutils','nativebindinglib') {
             $p = Join-Path $pkgRoot $id
             if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
           }

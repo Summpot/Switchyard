@@ -122,4 +122,43 @@ public class ReferenceRedirectTests : IDisposable
         Assert.True(ReferenceRedirector.ReferencesAnyPackage(caller, new[] { "TargetLib" }));
         Assert.False(ReferenceRedirector.ReferencesAnyPackage(caller, new[] { "NonExistent" }));
     }
+
+    [Fact]
+    public void RedirectReferences_RewritesPInvokeModule_ToRoutedNativeName()
+    {
+        // The caller P/Invokes "nativebinding". Switchyard must rewrite the
+        // DllImport module to "nativebinding.Switchyard.1.0.0" so the routed
+        // managed version binds its own renamed native library instead of a
+        // single shared one.
+        string caller = TestAssemblyFactory.CreateAssemblyWithPInvoke(
+            Path.Combine(_tempDir, "MainApp.dll"),
+            "MainApp",
+            "nativebinding");
+
+        var managedRedirections = new Dictionary<string, string>();
+        var nativeRedirections = new Dictionary<string, string>
+        {
+            ["nativebinding"] = "nativebinding.Switchyard.1.0.0",
+        };
+        string outputPath = Path.Combine(_tempDir, "MainApp.Redirected.dll");
+
+        ReferenceRedirector.RedirectReferences(caller, managedRedirections, outputPath, nativeRedirections);
+
+        var module = ModuleDefinition.FromFile(outputPath);
+        var moduleRef = module.ModuleReferences.FirstOrDefault(r => r.Name?.Value == "nativebinding.Switchyard.1.0.0");
+        Assert.NotNull(moduleRef);
+        Assert.DoesNotContain(module.ModuleReferences, r => r.Name?.Value == "nativebinding");
+    }
+
+    [Fact]
+    public void GetPInvokeModuleNames_ReportsDeclaredNativeTargets()
+    {
+        string caller = TestAssemblyFactory.CreateAssemblyWithPInvoke(
+            Path.Combine(_tempDir, "ProbeApp.dll"),
+            "ProbeApp",
+            "nativebinding");
+
+        var names = ReferenceRedirector.GetPInvokeModuleNames(caller);
+        Assert.Contains("nativebinding", names);
+    }
 }

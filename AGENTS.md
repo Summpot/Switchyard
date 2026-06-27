@@ -38,7 +38,12 @@ test/
       BasicRouteApp/              # dual-version diversion (+ PaymentModule)
       RouteGroupApp/              # cascade sandbox
       InvalidCastApp/             # boundary tearing (+ BoundaryBreaker)
-  fixtures/                       # TargetLib / CommonUtils, packed at 1.0.0/2.0.0/3.5.0
+      NativeBindingApp/           # managed+native isolation (+ NativeConsumerModule)
+      ReflectionProbeApp/         # runtime-reflection dual-version probe
+  fixtures/                       # TargetLib / CommonUtils / NativeBindingLib
+      TargetLib/               # packed at 1.0.0 / 2.0.0 / 3.5.0
+      CommonUtils/             # TargetLib cascade dependency, by version
+      NativeBindingLib/        # managed DllImport + native.c, by version
 Switchyard.slnx                   # Solution (excludes TestSamples & fixtures)
 ```
 
@@ -94,6 +99,10 @@ re-verify with the Level 2 tests.
 4. **Redirect** every caller's `AssemblyReferences` to the appropriate routed
    name based on the caller's position in the route table
    (`ReferenceRedirector`).
+4. **Rename native libraries** for routed packages that carry a native
+   dependency, and rewrite the routed managed assembly's own `DllImport`
+   module names to the renamed native names so each routed version binds its
+   own native lib.
 5. **Swap** the MSBuild items: rebuild `ReferenceCopyLocalPaths` /
    `IntermediateAssembly` so MSBuild copies the rewritten files.
 
@@ -114,6 +123,20 @@ re-verify with the Level 2 tests.
   assembly as a synthetic `"type":"project"` library (mirroring project-ref
   outputs) and strips the original package's `runtime` entry so the SDK's
   publish flow does not copy the un-routed DLL back from the NuGet cache.
+
+### Native library isolation
+
+The `DllImport` target lives inside the routed package's own managed assembly
+(not in its callers), so the native-name rewrite must be applied to the
+**prepared target assembly** after `PrepareAndRename`, not only to callers.
+`SwitchyardPipeline.PrepareNativeLibraries` discovers native libs under
+`runtimes/{rid}/native/` for the host RID, derives the bare `DllImport` module
+name (strip extension; strip the `lib` prefix on Linux/macOS), renames the file
+to `{name}.Switchyard.{version}.{ext}` preserving the platform prefix/suffix,
+and rewrites the routed assembly's `ModuleRef` rows via
+`ReferenceRedirector.RewritePInvokeModules`. The original native libs are
+stripped from the copy-local stream (and from publish) via
+`SwitchyardPublishFilterTask.BlockedNativeFileNames`.
 
 ---
 
@@ -193,6 +216,8 @@ Covers the three core algorithms:
   name fully stripped, output re-readable, netmodule rejected.
 * `ReferenceRedirectTests` — use case 2 "Ref-Redirect": reference table
   rewritten, public key token cleared, original reference gone, short-circuits.
+  Also covers P/Invoke (`DllImport`) module-name rewrite and the
+  `GetPInvokeModuleNames` probe used by native-lib isolation.
 * `PdbAlignmentTests` — use case 3 "PDB-Align": `.pdb` copied, CodeView path
   repointed, MVID preserved, no-`.pdb` input handled. Uses the compiled
   `Switchyard.TestFixtures` assembly as the input (portable PDB).
@@ -200,10 +225,11 @@ Covers the three core algorithms:
 
 ### Level 2 + 3 — `Switchyard.IntegrationTests` (real `dotnet build`/`publish`/run)
 
-* `BuildUtility.EnsureLocalFeedReady` packs `Switchyard`, `TargetLib`, and
-  `CommonUtils` (at 1.0.0/2.0.0/3.5.0) into `test/local-feed` once per run,
-  after purging the `switchyard` entry from the global NuGet cache so the
-  freshly built `.targets` / Task DLL is re-extracted.
+* `BuildUtility.EnsureLocalFeedReady` packs `Switchyard`, `TargetLib`,
+  `CommonUtils` (at 1.0.0/2.0.0/3.5.0) and `NativeBindingLib` (with its native
+  library built from `native.c` via `cl`/`gcc`) into `test/local-feed` once per
+  run, after purging the `switchyard` / `nativebindinglib` entries from the
+  global NuGet cache so the freshly built `.targets` / Task DLL is re-extracted.
 * `LocalFeedFixture` is an xUnit **collection fixture**; all integration tests
   share the `[Collection("Integration")]` tag so xUnit **serialises** them.
   Reason: the `TestSamples` are built into a shared physical `bin/obj` tree —
@@ -211,6 +237,14 @@ Covers the three core algorithms:
   `obj/switchyard/*.dll`. **Do not remove the collection attribute.**
 * `PipelineInterceptTests` (Level 2): bin/publish interception, incremental
   build, RouteGroup cascade deep-inspection.
+* `NativeBindingTests` (Level 2 + 3): the Avalonia + higher-SkiaSharp-style
+  managed+native scenario. Asserts the renamed managed + native assemblies
+  land in `bin`, the original native lib is blocked, the routed managed DLL's
+  `DllImport` module name was rewritten, and the compiled exe reports distinct
+  native version constants per routed version (true native isolation).
+* `ReflectionProbeTests` (Level 3): `ReflectionProbeApp` loads both routed
+  DLLs via `Assembly.LoadFrom` + reflection (no compile-time reference to a
+  specific routed version) and reports the two distinct versions.
 * `RuntimeRoutingTests` (Level 3): run the compiled exes and assert Stdout
   proves dual-version diversion, type-boundary tearing, and cascade versions.
 
@@ -222,6 +256,17 @@ Covers the three core algorithms:
   internal reference has been cascaded.
 * boundary tearing — `InvalidCastApp` expects `InvalidCastException`,
   exits 0.
+* native-lib isolation — `NativeBindingApp` asserts each routed managed
+  version binds its own renamed native library (distinct native version
+  constants), proving native isolation rather than a single shared native load.
+
+### Local prerequisites for integration tests
+
+* **Windows:** Visual Studio with the C++ workload (for `cl.exe`), located via
+  `vswhere`; `BuildUtility` initialises `vcvars64` itself.
+* **Linux:** `gcc` on PATH (preinstalled on `ubuntu-latest`).
+The native fixture is only built for the host RID, so each CI matrix runner
+builds its own native library.
 
 When you add a feature, add a corresponding Level 1 test (fast) and a
 Level 2/3 sample if the feature changes the file stream or runtime behaviour.

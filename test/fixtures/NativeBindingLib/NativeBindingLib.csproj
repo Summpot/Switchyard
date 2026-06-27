@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>NativeBindingLib</PackageId>
+    <AssemblyVersion>$(NativeBindingLibAssemblyVersion)</AssemblyVersion>
+    <FileVersion>$(NativeBindingLibAssemblyVersion)</FileVersion>
+    <Version>$(NativeBindingLibPackageVersion)</Version>
+    <PackageVersion>$(NativeBindingLibPackageVersion)</PackageVersion>
+    <IsPackable>true</IsPackable>
+    <IncludeSymbols>false</IncludeSymbols>
+    <NoWarn>NU5105</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    Ship the per-RID native library built from native.c alongside the managed
+    assembly. The native file name is the bare DllImport target
+    ("nativebinding" -> nativebinding.dll on Windows, libnativebinding.so on
+    Linux). At pack time the host OS determines which runtimes/ folder is
+    populated by the build step in BuildUtility.
+  -->
+  <ItemGroup Condition="'$(NativeRuntimeRID)' == 'win-x64'">
+    <Content Include="runtimes\win-x64\native\nativebinding.dll"
+             Pack="true"
+             PackagePath="runtimes\win-x64\native\nativebinding.dll" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(NativeRuntimeRID)' == 'linux-x64'">
+    <Content Include="runtimes\linux-x64\native\libnativebinding.so"
+             Pack="true"
+             PackagePath="runtimes\linux-x64\native\libnativebinding.so" />
+  </ItemGroup>
+
+</Project>

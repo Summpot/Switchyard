@@ -21,10 +21,11 @@ You add a `<SwitchyardRoutes>` metadata entry to a `<PackageReference>` in your
 intercepts the file stream that MSBuild is about to copy to the output
 directory, fetches any missing routed versions from NuGet, renames the target
 DLLs (and their `.pdb`s), rewrites every caller's `AssemblyReferences` to point
-at the renamed assemblies, injects the renamed assemblies into `deps.json`'s
-TPA list, and strips the originals back out of the publish stream. The result
-lands in `bin` / `publish` with the rewritten files in place — incremental
-builds and `dotnet publish` keep working unchanged.
+at the renamed assemblies, rewrites `DllImport` entries and ships renamed native
+libraries for routed packages that carry a native dependency, injects the
+renamed assemblies into `deps.json`'s TPA list, and strips the originals back out
+of the publish stream. The result lands in `bin` / `publish` with the rewritten
+files in place — incremental builds and `dotnet publish` keep working unchanged.
 
 ## Installation
 
@@ -115,6 +116,25 @@ Violating this contract surfaces as `InvalidCastException` at runtime — which
 is exactly what the `InvalidCastApp` test sample proves (see
 `test/Switchyard.IntegrationTests/TestSamples/InvalidCastApp`).
 
+## Native library isolation
+
+Packages that ship a native dependency (e.g. **SkiaSharp**, the original
+motivation for Switchyard) are handled automatically. When a routed package
+contains a native library under `runtimes/{rid}/native/` that the managed
+assembly `DllImport`s, Switchyard:
+
+* renames the native file to `{native}.Switchyard.{version}.{ext}` (preserving
+  the platform `lib` prefix / extension so the OS loader still finds it),
+* rewrites the routed managed assembly's own `DllImport` module name to the
+  renamed native name,
+* ships one renamed native library per routed version.
+
+So each routed managed version binds its **own** native library, and two
+versions of a native-binding package no longer fight over a single native load.
+This is what makes the "use Avalonia while pulling in a higher SkiaSharp
+elsewhere" scenario work: Avalonia keeps its SkiaSharp, your other code uses
+the newer one, and the two `libskiasharp` copies coexist by name.
+
 ## Known limitations
 
 * **Strong-name stripping.** Renamed assemblies lose their original strong-name
@@ -125,6 +145,11 @@ is exactly what the `InvalidCastApp` test sample proves (see
 * **NativeAOT / trimming.** The static analyser cannot always trace the
   implicitly renamed `*.Switchyard.*.dll` references. When using AOT, declare
   the routed assemblies as roots in `ILLink.Descriptors.xml`.
+* **Native build toolchain for the test fixture.** The integration test that
+  exercises native-lib isolation builds a tiny native library from
+  `test/fixtures/NativeBindingLib/native.c`; on Windows it needs MSVC
+  (`cl.exe`) and on Linux `gcc` on PATH. This only affects running the
+  integration tests locally, not consuming Switchyard.
 
 ## Package layout
 

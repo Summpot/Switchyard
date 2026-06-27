@@ -95,6 +95,15 @@ public sealed class SwitchyardTask : Task
     [Output]
     public ITaskItem[]? NewRoutedAssemblies { get; set; }
 
+    /// <summary>
+    /// The original (un-routed) native library paths that should be stripped
+    /// from the copy-local output because a renamed native copy is shipped
+    /// instead. Consumed by the publish-cleanup target so the SDK's publish
+    /// flow does not resurrect the original native libraries.
+    /// </summary>
+    [Output]
+    public ITaskItem[]? NewRemovedOriginalNativePaths { get; set; }
+
     public override bool Execute()
     {
         var configurations = ConfigurationParser.Parse(PackageReferences);
@@ -155,6 +164,9 @@ public sealed class SwitchyardTask : Task
             NewReferenceCopyLocalPaths = BuildOutputItems(result, ReferenceCopyLocalPaths);
             NewIntermediateAssembly = BuildIntermediateAssembly(result, IntermediateAssembly);
             NewRoutedAssemblies = BuildRoutedAssemblyItems(result);
+            NewRemovedOriginalNativePaths = result.RemovedOriginalNativePaths
+                .Select(p => new TaskItem(p))
+                .ToArray();
 
             // deps.json is patched by the separate PatchSwitchyardDepsJson target,
             // which runs AFTER the SDK's GenerateBuildDependencyFile target: the
@@ -178,6 +190,7 @@ public sealed class SwitchyardTask : Task
     {
         var output = new List<ITaskItem>();
         var removed = new HashSet<string>(result.RemovedOriginalPaths, StringComparer.OrdinalIgnoreCase);
+        var removedNative = new HashSet<string>(result.RemovedOriginalNativePaths, StringComparer.OrdinalIgnoreCase);
 
         if (originalItems is not null)
         {
@@ -201,6 +214,12 @@ public sealed class SwitchyardTask : Task
                 if (removed.Contains(item.ItemSpec))
                     continue;
 
+                // Strip the original (un-routed) native libraries that MSBuild
+                // resolved under runtimes/{rid}/native/ — a renamed copy is
+                // shipped instead so each routed version binds its own native.
+                if (removedNative.Contains(item.ItemSpec))
+                    continue;
+
                 output.Add(item);
             }
         }
@@ -212,6 +231,12 @@ public sealed class SwitchyardTask : Task
 
             if (prepared.PdbPath is not null && File.Exists(prepared.PdbPath))
                 output.Add(new TaskItem(prepared.PdbPath));
+
+            foreach (var nativePath in prepared.NativeLibraryPaths)
+            {
+                if (File.Exists(nativePath))
+                    output.Add(new TaskItem(nativePath));
+            }
         }
 
         return output.ToArray();

@@ -1,4 +1,5 @@
 using AsmResolver.DotNet;
+using AsmResolver.DotNet.Signatures;
 using AsmResolver.PE.DotNet.Metadata.Tables;
 
 namespace Switchyard.Core.Tests;
@@ -113,6 +114,51 @@ internal static class TestAssemblyFactory
                 FieldAttributes.Private | FieldAttributes.Static,
                 typeRef.ToTypeSignature(false)));
         }
+
+        assembly.Write(outputPath);
+        return outputPath;
+    }
+
+    /// <summary>
+    /// Creates an assembly that declares a P/Invoke method imported from the
+    /// supplied native library name. Used to verify the weaver rewrites the
+    /// DllImport target module name (ModuleRef) when a routed package carries
+    /// a native dependency.
+    /// </summary>
+    public static string CreateAssemblyWithPInvoke(
+        string outputPath,
+        string assemblyName,
+        string nativeLibraryName,
+        string importName = "native_get_version")
+    {
+        var assembly = new AssemblyDefinition(assemblyName, new Version(1, 0, 0, 0));
+        var module = new ModuleDefinition(assemblyName + ".dll", KnownCorLibs.SystemRuntime_v8_0_0_0);
+        assembly.Modules.Add(module);
+
+        var moduleRef = new ModuleReference(nativeLibraryName);
+        module.ModuleReferences.Add(moduleRef);
+
+        var type = new TypeDefinition(
+            assemblyName, "NativeInterop",
+            TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed,
+            module.CorLibTypeFactory.Object.Type);
+        module.TopLevelTypes.Add(type);
+
+        // P/Invoke method: static int native_get_version(); no IL body.
+        var method = new MethodDefinition(
+            importName,
+            MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.PInvokeImpl,
+            MethodSignature.CreateStatic(module.CorLibTypeFactory.Int32),
+            verify: false);
+        // P/Invoke methods are native (no managed IL body) and preserve the
+        // native calling convention/signature.
+        method.ImplAttributes |=
+            MethodImplAttributes.PreserveSig |
+            MethodImplAttributes.Native;
+        method.ImplementationMap = new ImplementationMap(
+            moduleRef, importName, ImplementationMapAttributes.CallConvCdecl);
+
+        type.Methods.Add(method);
 
         assembly.Write(outputPath);
         return outputPath;

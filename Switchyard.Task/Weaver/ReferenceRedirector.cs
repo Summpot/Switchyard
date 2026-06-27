@@ -12,6 +12,12 @@ namespace Switchyard.Weaver;
 /// updates every referencing <c>TypeRef</c> token.
 /// </summary>
 /// <remarks>
+/// When a routed package carries a native dependency, the caller's
+/// <c>DllImport</c> entries that target the package's native library are also
+/// repointed at the routed native library name, so each routed managed version
+/// binds its own native library and native-lib conflicts are avoided.
+/// </remarks>
+/// <remarks>
 /// Runtime consequence: once renamed, two routed versions of a package are
 /// distinct type systems to the CLR. Passing a typed object from a routed
 /// package across a route boundary throws <c>InvalidCastException</c>.
@@ -27,12 +33,19 @@ public static class ReferenceRedirector
     /// writes the modified assembly to <paramref name="outputPath"/>. The
     /// matching <c>.pdb</c> is copied alongside so debugging keeps working.
     /// </summary>
+    /// <param name="nativeRedirections">
+    /// Optional map of native library names to rewrite in
+    /// <c>DllImport</c>/<c>ImplMap</c> entries (original native name ->
+    /// routed native name). May be <c>null</c> or empty for packages without
+    /// a native dependency.
+    /// </param>
     public static void RedirectReferences(
         string assemblyPath,
         IReadOnlyDictionary<string, string> redirections,
-        string outputPath)
+        string outputPath,
+        IReadOnlyDictionary<string, string>? nativeRedirections = null)
     {
-        if (redirections.Count == 0)
+        if (redirections.Count == 0 && (nativeRedirections is null || nativeRedirections.Count == 0))
             return;
 
         var module = ReadModule(assemblyPath);
@@ -60,6 +73,12 @@ public static class ReferenceRedirector
             reference.PublicKeyOrToken = null;
             reference.HasPublicKey = false;
             changed = true;
+        }
+
+        if (nativeRedirections is not null && nativeRedirections.Count > 0)
+        {
+            if (RewritePInvokeModules(module, nativeRedirections))
+                changed = true;
         }
 
         if (!changed)
@@ -115,6 +134,68 @@ public static class ReferenceRedirector
             PEReaderParameters = new AsmResolver.PE.PEReaderParameters()
         };
         return ModuleDefinition.FromFile(sourcePath, readerParameters);
+    }
+
+    /// <summary>
+    /// Rewrites the <c>ModuleRef</c> names referenced by every
+    /// <c>ImplMap</c> (P/Invoke / <c>DllImport</c>) entry in
+    /// <paramref name="module"/> according to <paramref name="nativeRedirections"/>
+    /// (original native lib name -> routed native lib name). Returns
+    /// <c>true</c> when at least one entry was rewritten.
+    /// </summary>
+    /// <remarks>
+    /// P/Invoke resolution is by the module name stored in the
+    /// <c>ModuleRef</c> row, not by assembly identity. Two routed managed
+    /// versions of a package that both <c>DllImport</c> the same native name
+    /// would otherwise share a single native library loaded by the OS. Naming
+    /// the native library per routed version (and shipping a renamed copy of
+    /// the native file) gives each routed version its own native binding.
+    /// </remarks>
+    private static bool RewritePInvokeModules(
+        ModuleDefinition module,
+        IReadOnlyDictionary<string, string> nativeRedirections)
+    {
+        var changed = false;
+        foreach (var moduleRef in module.ModuleReferences)
+        {
+            if (moduleRef.Name is null)
+                continue;
+
+            var name = moduleRef.Name.Value ?? string.Empty;
+            if (!nativeRedirections.TryGetValue(name, out var routedName))
+                continue;
+
+            moduleRef.Name = routedName;
+            changed = true;
+        }
+        return changed;
+    }
+
+    /// <summary>
+    /// Returns the set of native library names referenced by the
+    /// <c>ModuleRef</c> rows backing the module's P/Invoke entries. Used to
+    /// detect which native libraries a managed assembly binds to.
+    /// </summary>
+    public static IReadOnlyCollection<string> GetPInvokeModuleNames(string assemblyPath)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        if (!IsManagedAssembly(assemblyPath))
+            return result;
+
+        try
+        {
+            var module = ReadModule(assemblyPath);
+            foreach (var moduleRef in module.ModuleReferences)
+            {
+                var name = moduleRef.Name?.Value;
+                if (name is not null)
+                    result.Add(name);
+            }
+        }
+        catch (BadImageFormatException)
+        {
+        }
+        return result;
     }
 
     /// <summary>

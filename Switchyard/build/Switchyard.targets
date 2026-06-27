@@ -51,6 +51,8 @@
               PropertyName="SwitchyardNewIntermediateAssemblyPath" />
       <Output TaskParameter="NewRoutedAssemblies"
               ItemName="SwitchyardRoutedAssemblies" />
+      <Output TaskParameter="NewRemovedOriginalNativePaths"
+              ItemName="SwitchyardRemovedOriginalNativePaths" />
     </SwitchyardTask>
 
     <ItemGroup>
@@ -89,23 +91,27 @@
 
     The publish pipeline re-resolves copy-local assets from the lock file
     (ResolveLockFileCopyLocalFiles / _ResolvedCopyLocalBuildAssets), which
-    resurrects the original un-routed package DLLs (e.g. TargetLib.dll) into
-    the publish file stream even though the build phase removed them from
-    @(ReferenceCopyLocalPaths). This target runs right before the publish
-    asset list is finalised and strips the original package DLLs back out of
-    both @(ReferenceCopyLocalPaths) and @(_ResolvedCopyLocalPublishAssets) so
-    only the routed (renamed) assemblies reach the publish directory.
+    resurrects the original un-routed package DLLs (e.g. TargetLib.dll) and
+    native libraries (e.g. libskiasharp.dll) into the publish file stream
+    even though the build phase removed them from @(ReferenceCopyLocalPaths).
+    This target runs right before the publish asset list is finalised and
+    strips the original package DLLs (by package id) and the original native
+    libraries (by file name) back out of both @(ReferenceCopyLocalPaths) and
+    @(_ResolvedCopyLocalPublishAssets) so only the routed (renamed) assemblies
+    and their renamed native libraries reach the publish directory.
   -->
   <Target Name="SwitchyardPublishCleanup"
           BeforeTargets="_ComputeResolvedCopyLocalPublishAssets"
           Condition="'$(SwitchyardEnabled)' == 'true' And '@(SwitchyardRoutedAssemblies)' != ''">
 
     <SwitchyardPublishFilterTask CopyLocalItems="@(ReferenceCopyLocalPaths)"
-                                 RoutedAssemblies="@(SwitchyardRoutedAssemblies)">
+                                 RoutedAssemblies="@(SwitchyardRoutedAssemblies)"
+                                 BlockedNativeFileNames="@(SwitchyardRemovedOriginalNativePaths)">
       <Output TaskParameter="FilteredItems" ItemName="_SwitchyardFilteredRefCopyLocal" />
     </SwitchyardPublishFilterTask>
     <SwitchyardPublishFilterTask CopyLocalItems="@(_ResolvedCopyLocalPublishAssets)"
-                                 RoutedAssemblies="@(SwitchyardRoutedAssemblies)">
+                                 RoutedAssemblies="@(SwitchyardRoutedAssemblies)"
+                                 BlockedNativeFileNames="@(SwitchyardRemovedOriginalNativePaths)">
       <Output TaskParameter="FilteredItems" ItemName="_SwitchyardFilteredPublishAssets" />
     </SwitchyardPublishFilterTask>
 

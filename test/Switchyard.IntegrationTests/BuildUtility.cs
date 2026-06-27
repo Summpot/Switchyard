@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace Switchyard.IntegrationTests;
 
@@ -109,6 +110,7 @@ public static class BuildUtility
             // have changed), but NuGet will keep serving the stale 1.0.0 from
             // the global packages folder unless we force re-extraction.
             PurgeGlobalPackageCache("switchyard");
+            PurgeGlobalPackageCache("nativebindinglib");
 
             // 1. Pack Switchyard
             PackSwitchyard(repoRoot);
@@ -124,6 +126,14 @@ public static class BuildUtility
             PackTargetLib(repoRoot, "2.0.0", "2.0.0");
             PackTargetLib(repoRoot, "3.5.0", "3.5.0");
 
+            // 4. Build the native library fixture for the host RID and pack
+            //    NativeBindingLib at 1.0.0, 2.0.0 and 3.5.0. This exercises the
+            //    managed + native-dependency scenario (the Avalonia + higher
+            //    SkiaSharp pattern). 2.0.0 is the unused "original" version.
+            BuildAndPackNativeBindingLib(repoRoot, "1.0.0");
+            BuildAndPackNativeBindingLib(repoRoot, "2.0.0");
+            BuildAndPackNativeBindingLib(repoRoot, "3.5.0");
+
             _feedReady = true;
         }
     }
@@ -134,6 +144,114 @@ public static class BuildUtility
         var result = RunCommand("dotnet", $"pack \"{csproj}\" -c Release -p:PackageVersion=1.0.0 -o \"{LocalFeedPath}\" --nologo", repoRoot);
         if (!result.Success)
             throw new InvalidOperationException($"Failed to pack Switchyard:\n{result.StandardError}");
+    }
+
+    /// <summary>
+    /// The runtime identifier of the host that runs the tests. The native
+    /// library fixture is built only for this RID so the sample's P/Invoke
+    /// resolves at runtime.
+    /// </summary>
+    public static string HostRuntimeIdentifier
+    {
+        get
+        {
+            string arch = RuntimeInformation.OSArchitecture switch
+            {
+                Architecture.X64 => "x64",
+                Architecture.X86 => "x86",
+                Architecture.Arm64 => "arm64",
+                _ => "x64",
+            };
+            if (OperatingSystem.IsWindows()) return "win-" + arch;
+            if (OperatingSystem.IsLinux()) return "linux-" + arch;
+            if (OperatingSystem.IsMacOS()) return "osx-" + arch;
+            return "win-" + arch;
+        }
+    }
+
+    /// <summary>
+    /// Compiles the native library fixture (native.c) for the host RID with
+    /// the version constant baked in, then packs NativeBindingLib at that
+    /// version. The native file lands under runtimes/{rid}/native/ in the
+    /// package so the consuming app's P/Invoke resolves to it.
+    /// </summary>
+    private static void BuildAndPackNativeBindingLib(string repoRoot, string version)
+    {
+        string fixtureDir = Path.Combine(repoRoot, "test", "fixtures", "NativeBindingLib");
+        string rid = HostRuntimeIdentifier;
+        string nativeOutDir = Path.Combine(fixtureDir, "runtimes", rid, "native");
+        Directory.CreateDirectory(nativeOutDir);
+
+        // Parse the major version as the integer constant baked into the
+        // native lib (1.0.0 -> 1, 3.5.0 -> 3). Keeps the assertion readable.
+        int verConst = int.Parse(version.Split('.')[0]);
+
+        if (OperatingSystem.IsWindows())
+        {
+            // cl.exe is not normally on PATH. Locate the MSVC dev environment
+            // via vswhere and run cl inside an initialised vcvars64 shell so
+            // the compiler + linker paths resolve. We write a temporary batch
+            // file to avoid fragile nested-quoting through cmd /c.
+            string vcvars = FindMsvcDevCmd()
+                ?? throw new InvalidOperationException(
+                    "Could not locate the MSVC dev environment (vcvars64.bat) via vswhere. " +
+                    "Visual Studio with the C++ workload is required to build the native fixture on Windows.");
+            string outDll = Path.Combine(nativeOutDir, "nativebinding.dll");
+            string objFile = Path.Combine(nativeOutDir, "native.obj");
+            string batPath = Path.Combine(nativeOutDir, "_build_native.bat");
+            File.WriteAllText(batPath,
+                $"@echo off\r\n" +
+                $"call \"{vcvars}\"\r\n" +
+                $"cl /LD /O2 /D NATIVE_VER={verConst} \"{Path.Combine(fixtureDir, "native.c")}\" " +
+                $"/Fo:\"{objFile}\" /Fe:\"{outDll}\" /link /NOLOGO\r\n");
+            var result = RunCommand("cmd", $"/c \"{batPath}\"", fixtureDir);
+            if (!result.Success || !File.Exists(outDll))
+                throw new InvalidOperationException($"cl.exe failed for NativeBindingLib {version}:\n{result.StandardError}\n{result.StandardOutput}");
+            try { File.Delete(batPath); File.Delete(objFile); } catch { }
+        }
+        else
+        {
+            string outSo = Path.Combine(nativeOutDir, "libnativebinding.so");
+            var result = RunCommand("gcc",
+                $"-shared -fPIC -O2 -DNATIVE_VER={verConst} -o \"{outSo}\" native.c",
+                fixtureDir);
+            if (!result.Success)
+                throw new InvalidOperationException($"gcc failed for NativeBindingLib {version}:\n{result.StandardError}\n{result.StandardOutput}");
+        }
+
+        // Pack the managed project with the host RID so the correct native
+        // file is included in the package.
+        string csproj = Path.Combine(fixtureDir, "NativeBindingLib.csproj");
+        var packResult = RunCommand("dotnet",
+            $"pack \"{csproj}\" -c Release" +
+            $" -p:NativeBindingLibPackageVersion={version}" +
+            $" -p:NativeBindingLibAssemblyVersion={version}" +
+            $" -p:NativeRuntimeRID={rid}" +
+            $" -o \"{LocalFeedPath}\" --nologo", repoRoot);
+        if (!packResult.Success)
+            throw new InvalidOperationException($"Failed to pack NativeBindingLib {version}:\n{packResult.StandardError}\n{packResult.StandardOutput}");
+    }
+
+    /// <summary>
+    /// Locates the MSVC <c>vcvars64.bat</c> dev-environment script via
+    /// <c>vswhere</c> so the native build can invoke <c>cl.exe</c> even though
+    /// it is not on PATH. Returns <c>null</c> on non-Windows hosts.
+    /// </summary>
+    private static string? FindMsvcDevCmd()
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        string vswhere = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            "Microsoft Visual Studio", "Installer", "vswhere.exe");
+        if (!File.Exists(vswhere)) return null;
+
+        var vsResult = RunCommand(vswhere, "-latest -products * -property installationPath");
+        if (!vsResult.Success) return null;
+        string install = vsResult.StandardOutput.Trim();
+        if (string.IsNullOrEmpty(install)) return null;
+
+        string vcvars = Path.Combine(install, "VC", "Auxiliary", "Build", "vcvars64.bat");
+        return File.Exists(vcvars) ? vcvars : null;
     }
 
     /// <summary>

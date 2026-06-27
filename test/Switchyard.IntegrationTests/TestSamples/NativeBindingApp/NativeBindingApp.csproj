@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>NativeBindingApp</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <SwitchyardEnabled>true</SwitchyardEnabled>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Switchyard" Version="1.0.0" />
+    <!--
+      The declared version (2.0.0) is the "original" — it is restored by NuGet
+      but routed to nobody, so Switchyard blocks it from bin. The two routed
+      versions (1.0.0 and 3.5.0) are both renamed, each with its own renamed
+      native library.
+    -->
+    <PackageReference Include="NativeBindingLib" Version="2.0.0">
+      <SwitchyardRoutes>NativeBindingApp=1.0.0;NativeConsumerModule=3.5.0</SwitchyardRoutes>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NativeConsumerModule\NativeConsumerModule.csproj" />
+  </ItemGroup>
+
+</Project>

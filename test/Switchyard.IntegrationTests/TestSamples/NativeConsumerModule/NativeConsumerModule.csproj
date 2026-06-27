@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>NativeConsumerModule</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Reference the same version as the app (the "original" 2.0.0) so NuGet
+         does not flag a downgrade. Switchyard routes this module to 3.5.0. -->
+    <PackageReference Include="NativeBindingLib" Version="2.0.0" />
+  </ItemGroup>
+
+</Project>

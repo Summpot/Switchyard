@@ -32,9 +32,16 @@ public sealed class SwitchyardPublishFilterTask : Task
     public ITaskItem[]? RoutedAssemblies { get; set; }
 
     /// <summary>
+    /// Optional set of native library file names (e.g.
+    /// <c>libskiasharp.dll</c>) to drop from the copy-local stream because a
+    /// renamed, routed native copy is shipped instead.
+    /// </summary>
+    public ITaskItem[]? BlockedNativeFileNames { get; set; }
+
+    /// <summary>
     /// The filtered items: every input item whose file name (without
-    /// extension) is NOT one of the routed package ids, with all metadata
-    /// preserved.
+    /// extension) is NOT one of the routed package ids, and whose file name is
+    /// NOT a blocked native file name, with all metadata preserved.
     /// </summary>
     [Output]
     public ITaskItem[]? FilteredItems { get; set; }
@@ -46,25 +53,44 @@ public sealed class SwitchyardPublishFilterTask : Task
             FilteredItems = CopyLocalItems;
             return true;
         }
-        if (RoutedAssemblies is null || RoutedAssemblies.Length == 0)
+        if ((RoutedAssemblies is null || RoutedAssemblies.Length == 0)
+            && (BlockedNativeFileNames is null || BlockedNativeFileNames.Length == 0))
         {
             FilteredItems = CopyLocalItems;
             return true;
         }
 
         var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var item in RoutedAssemblies)
+        if (RoutedAssemblies is not null)
         {
-            var id = item.ItemSpec;
-            if (!string.IsNullOrWhiteSpace(id))
-                blocked.Add(id);
+            foreach (var item in RoutedAssemblies)
+            {
+                var id = item.ItemSpec;
+                if (!string.IsNullOrWhiteSpace(id))
+                    blocked.Add(id);
+            }
+        }
+
+        var blockedNativeFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (BlockedNativeFileNames is not null)
+        {
+            foreach (var item in BlockedNativeFileNames)
+            {
+                var name = item.ItemSpec;
+                if (!string.IsNullOrWhiteSpace(name))
+                    blockedNativeFiles.Add(Path.GetFileName(name));
+            }
         }
 
         var kept = new List<ITaskItem>();
         foreach (var item in CopyLocalItems)
         {
-            string fileName = Path.GetFileNameWithoutExtension(item.ItemSpec);
-            if (blocked.Contains(fileName))
+            string fileName = Path.GetFileName(item.ItemSpec);
+            string baseName = Path.GetFileNameWithoutExtension(fileName);
+
+            if (blocked.Contains(baseName))
+                continue;
+            if (blockedNativeFiles.Contains(fileName))
                 continue;
             kept.Add(item);
         }
