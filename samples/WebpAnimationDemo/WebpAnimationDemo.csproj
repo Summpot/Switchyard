@@ -20,38 +20,23 @@
   </ItemGroup>
 
   <!--
-    WebpEncoder.dll is compiled against SkiaSharp 4.147.0-preview (it needs
-    SKWebpEncoder). It is referenced as a RAW <Reference> (not a ProjectReference)
-    so its SkiaSharp 4.147 NuGet dependency does NOT flow into this project's
-    restore — the host app must restore SkiaSharp 2.88.9 (what Avalonia pins).
-    The library source must NOT be compiled into this project (it references
-    SKWebpEncoder, which does not exist in 2.88.9); only the pre-built DLL is
-    referenced. Switchyard then routes the WebpEncoder assembly to
-    4.147.0-preview at build time (downloaded on demand) so at runtime
-    WebpEncoder loads the renamed SkiaSharp.Switchyard.4.147.0-preview while
-    Avalonia keeps the 2.88.9 original.
+    SkiaSharp version conflict — the whole reason Switchyard exists:
+      * This app wants SkiaSharp 4.148.0 so it can use SKWebpEncoder (animated
+        WebP), an API that does NOT exist in the 2.88.9 SkiaSharp Avalonia pins.
+      * Avalonia.Skia transitively requires SkiaSharp >= 2.88.9, so NuGet would
+        unify everything to 4.148.0 — but Avalonia is only validated against
+        2.88.9 and may break on 4.148.
+
+    Single-project, multi-version: declare the NEW version (4.148.0) so the
+    app compiles against it and sees SKWebpEncoder, then route every OTHER
+    caller (Avalonia.Skia etc.) DOWN to the OLD version (2.88.9) at build time.
+    Switchyard downloads 2.88.9 on demand and isolates its native libskiasharp,
+    so Avalonia renders with 2.88.9 while this app's own code uses 4.148.0 — in
+    one process, one project.
   -->
   <ItemGroup>
-    <Compile Remove="WebpEncoder\**\*.cs" />
-    <Reference Include="WebpEncoder">
-      <HintPath>WebpEncoder\bin\$(Configuration)\net8.0\WebpEncoder.dll</HintPath>
-      <Private>true</Private>
-    </Reference>
-  </ItemGroup>
-
-  <ItemGroup>
-    <!--
-      SkiaSharp version conflict — the whole reason Switchyard exists:
-        * Avalonia.Skia transitively pins SkiaSharp 2.88.9 (no SKWebpEncoder).
-        * WebpEncoder.dll needs SkiaSharp 4.147.0-preview (animated WebP).
-
-      The declared version (2.88.9) is the "original" — Avalonia keeps it for its
-      own rendering. Switchyard routes the WebpEncoder assembly to
-      4.147.0-preview.3.1. The two managed versions (and their two native
-      libskiasharp copies) coexist in one process.
-    -->
-    <PackageReference Include="SkiaSharp" Version="2.88.9">
-      <SwitchyardRoutes>WebpEncoder=4.147.0-preview.3.1</SwitchyardRoutes>
+    <PackageReference Include="SkiaSharp" Version="4.148.0">
+      <SwitchyardRoutes>WebpAnimationDemo=4.148.0;*=2.88.9</SwitchyardRoutes>
     </PackageReference>
   </ItemGroup>
 

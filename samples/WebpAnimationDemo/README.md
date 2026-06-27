@@ -1,60 +1,73 @@
 # WebP Animation Demo — Avalonia + higher SkiaSharp via Switchyard
 
-A runnable sample of the exact scenario Switchyard was built for: use Avalonia
-(which pins an older SkiaSharp for its own rendering) **while simultaneously**
-calling SkiaSharp 4.147.0-preview's `SKWebpEncoder.EncodeAnimated` to produce an
-animated WebP — an API that does not exist in the 2.88.9 SkiaSharp Avalonia
-ships with.
+A runnable, **single-project** sample of the scenario Switchyard was built for:
+use Avalonia (which pins an older SkiaSharp for its own rendering) **while
+simultaneously** calling SkiaSharp 4.148.0's `SKWebpEncoder.EncodeAnimated` to
+produce an animated WebP — an API that does not exist in the 2.88.9 SkiaSharp
+Avalonia ships with. One project, one process, two SkiaSharp versions.
 
-## What it shows
+## How it is wired (single project, multi-version)
 
-- Avalonia 11.3 renders its window with SkiaSharp **2.88.9** (its transitive
-  dependency).
-- `WebpEncoder.dll` (a tiny library compiled against SkiaSharp
-  **4.147.0-preview**) encodes a bouncing-ball animated WebP via
-  `SKWebpEncoder.EncodeAnimated`.
-- Both managed SkiaSharp versions **and both native `libSkiaSharp` copies**
-  coexist in one process, isolated by name — Avalonia never sees the 4.147
-  native, the WebP encoder never sees the 2.88.9 native.
+The trick is to declare the **new** version and route the framework **down** to
+the old one:
 
-## How it is wired
-
-```
-samples/WebpAnimationDemo/
-  WebpAnimationDemo.csproj   # Avalonia app; pins SkiaSharp 2.88.9, routes WebpEncoder to 4.147.0-preview.3.1
-  Program.cs / MainWindow    # Avalonia UI + WebP-first-frame preview
-  WebpEncoder/               # class library compiled against SkiaSharp 4.147.0-preview (sees SKWebpEncoder)
-  nuget.config               # local Switchyard feed + nuget.org
+```xml
+<PackageReference Include="SkiaSharp" Version="4.148.0">
+  <SwitchyardRoutes>WebpAnimationDemo=4.148.0;*=2.88.9</SwitchyardRoutes>
+</PackageReference>
 ```
 
-The two-project split is required by how NuGet works: a project compiles
-against the **single** SkiaSharp version it restores, so the code that uses
-`SKWebpEncoder` (only in 4.147.0-preview) must live in a library that restores
-4.147.0-preview. That library is referenced as a **raw `<Reference>`** so its
-4.147 dependency does NOT flow into the Avalonia app's restore (which must stay
-on 2.88.9 for Avalonia). Switchyard then routes the `WebpEncoder` assembly to
-4.147.0-preview at build time (downloaded on demand) while Avalonia keeps 2.88.9.
+- The declared version is **4.148.0**, so the project compiles against it and
+  `SKWebpEncoder` is visible — the app's own WebP code calls it directly.
+- `*=2.88.9` routes **every other caller** (Avalonia.Skia etc.) DOWN to 2.88.9
+  at build time. Switchyard downloads 2.88.9 on demand, renames it to
+  `SkiaSharp.Switchyard.2.88.9`, rewrites Avalonia.Skia's SkiaSharp reference,
+  isolates its native `libSkiaSharp`, and strips 4.148.0's runtime entry for
+  Avalonia's view.
+- `WebpAnimationDemo=4.148.0` keeps the app's own assembly on the declared
+  original, so the app binds `SkiaSharp.dll` (4.148.0) and its native
+  `libSkiaSharp.dll` directly.
+
+Result in `bin`:
+
+```
+SkiaSharp.dll                            # 4.148.0 (the app's own code)
+SkiaSharp.Switchyard.2.88.9.dll          # 2.88.9 (Avalonia)
+libSkiaSharp.Switchyard.2.88.9.dll       # 2.88.9 native (Avalonia, isolated)
+runtimes/win-x64/native/libSkiaSharp.dll # 4.148.0 native (the app)
+```
+
+Avalonia renders with 2.88.9; the app encodes WebP with 4.148.0 — in one process
+with no `AssemblyLoadContext`, no `extern alias`, no extra project.
+
+## Why this direction (and not the other way around)
+
+You must declare the version whose API you want to *call at compile time*. If
+you declared 2.88.9 (to satisfy Avalonia) and routed the app UP to 4.148.0, the
+app would compile against 2.88.9 and could not see `SKWebpEncoder`. Declaring
+4.148.0 makes the new API available to compile against, and Switchyard keeps
+Avalonia on the version it was validated against.
+
+> NuGet unifies SkiaSharp to 4.148.0 across the graph (Avalonia.Skia's
+> `>= 2.88.9` constraint is satisfied by 4.148.0). The MSB3277 "different
+> versions of SkiaSharp" build warning is expected and harmless — it is the
+> conflict Switchyard resolves at runtime by routing Avalonia down to 2.88.9.
 
 ## Build & run
 
-First pack Switchyard into the local feed (once, from the repo root):
+Pack Switchyard into the local feed once (from the repo root):
 
 ```bash
 dotnet pack Switchyard/Switchyard.csproj -c Release -p:PackageVersion=1.0.0 -o test/local-feed
 ```
 
-Then build the library and the app, and run:
+Then build and run the single project:
 
 ```bash
-dotnet build samples/WebpAnimationDemo/WebpEncoder/WebpEncoder.csproj -c Release
 dotnet run --project samples/WebpAnimationDemo/WebpAnimationDemo.csproj -c Release
 ```
 
-A window opens; click **Encode WebP** to regenerate `bouncing-ball.webp` and
-preview its first frame (rendered through Avalonia's 2.88.9 SkiaSharp). The
-console prints which SkiaSharp each side bound to.
-
-> Rebuild `WebpEncoder` first whenever you change it; the app references the
-> built DLL. The MSB3277 "different versions of SkiaSharp" warning during the
-> app build is expected and harmless — it is the conflict Switchyard resolves
-> at runtime.
+A window opens; the console reports `App's SkiaSharp ... 4.148.0.0` and writes
+`bouncing-ball.webp` (an animated WebP the app could only have produced via the
+4.148.0-only `SKWebpEncoder`). Click **Encode WebP** in the window to regenerate
+it and preview the first frame (rendered through Avalonia's 2.88.9 SkiaSharp).

@@ -5,9 +5,10 @@ namespace WebpAnimationDemo;
 
 /// <summary>
 /// Builds a bouncing-ball animated WebP using <c>SKWebpEncoder.EncodeAnimated</c>,
-/// an API available in SkiaSharp 4.147.0-preview and later. Switchyard routes this
-/// demo's SkiaSharp reference to that version while Avalonia keeps its own 2.88.9
-/// binding, so the two coexist in one process.
+/// an API available in SkiaSharp 4.148.0 and later. This project declares
+/// SkiaSharp 4.148.0 so it compiles against that version and sees SKWebpEncoder;
+/// Switchyard routes Avalonia (and any other non-app caller) DOWN to 2.88.9 at
+/// build time, so Avalonia keeps its older SkiaSharp while this code uses 4.148.0.
 /// </summary>
 public static class WebpEncoder
 {

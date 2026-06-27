@@ -7,26 +7,22 @@ namespace WebpAnimationDemo;
 
 public static class Program
 {
-    // Initialization order matters: build the Avalonia app, show the window,
-    // then demonstrate the routed (4.147.0-preview) SkiaSharp's animated WebP
-    // encoder — an API that is NOT in the 2.88.9 SkiaSharp Avalonia uses. The
-    // WebP code lives in WebpEncoder.dll, which Switchyard routes to
-    // 4.147.0-preview at build time; this main app compiles only against 2.88.9
-    // (for Avalonia) and the WebpEncoder API surface, never touching
-    // SKWebpEncoder directly.
+    // This single project uses TWO SkiaSharp versions at once, via Switchyard:
+    //   * It declares SkiaSharp 4.148.0 so it compiles against it and can call
+    //     SKWebpEncoder.EncodeAnimated (animated WebP) — an API absent from
+    //     the 2.88.9 SkiaSharp Avalonia pins.
+    //   * Switchyard routes every other caller (Avalonia.Skia etc.) DOWN to
+    //     2.88.9, so Avalonia keeps its validated SkiaSharp.
     [STAThread]
     public static void Main(string[] args)
     {
-        Console.WriteLine("[DEMO] Avalonia's SkiaSharp (rendering): "
-            + typeof(SKBitmap).Assembly.GetName().Version);
+        Console.WriteLine("[DEMO] App's SkiaSharp (compile + own code): "
+            + typeof(SKWebpEncoder).Assembly.GetName().Version);
 
-        // Build the WebP animation up front so it exists on disk when the
-        // window opens. The call crosses into WebpEncoder.dll, which at runtime
-        // binds SkiaSharp.Switchyard.4.147.0-preview (routed by Switchyard).
         string outPath = Path.Combine(AppContext.BaseDirectory, "bouncing-ball.webp");
         var bytes = WebpEncoder.EncodeAnimation(outPath);
         Console.WriteLine("[DEMO] Animated WebP written: bouncing-ball.webp ("
-            + (bytes?.Length ?? 0) + " bytes)");
+            + (bytes?.Length ?? 0) + " bytes) via SKWebpEncoder (4.148.0 only)");
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
