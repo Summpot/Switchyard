@@ -158,7 +158,7 @@ public sealed class SwitchyardTask : Task
             return false;
         }
 
-        var targetFramework = string.IsNullOrWhiteSpace(TargetFramework) ? "net8.0" : TargetFramework!;
+        var targetFramework = string.IsNullOrWhiteSpace(TargetFramework) ? "net10.0" : TargetFramework!;
         var assemblyName = AssemblyName ?? string.Empty;
 
         LogMessage($"Switchyard: processing {configurations.Count} route configuration(s).");

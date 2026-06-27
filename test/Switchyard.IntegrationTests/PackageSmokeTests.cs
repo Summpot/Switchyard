@@ -47,7 +47,7 @@ public class PackageSmokeTests
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup>
                     <OutputType>Exe</OutputType>
-                    <TargetFramework>net8.0</TargetFramework>
+                    <TargetFramework>net10.0</TargetFramework>
                     <ImplicitUsings>enable</ImplicitUsings>
                     <Nullable>enable</Nullable>
                     <SwitchyardEnabled>true</SwitchyardEnabled>
@@ -79,7 +79,7 @@ public class PackageSmokeTests
                 $"Build failed:\nSTDOUT:\n{result.StandardOutput}\nSTDERR:\n{result.StandardError}");
             Assert.Contains("Switchyard: processing", result.StandardOutput);
 
-            string binDir = Path.Combine(root, "bin", "Release", "net8.0");
+            string binDir = Path.Combine(root, "bin", "Release", "net10.0");
             Assert.True(File.Exists(Path.Combine(binDir, "TargetLib.Switchyard.1.0.0.dll")));
             Assert.False(File.Exists(Path.Combine(binDir, "TargetLib.dll")));
         }

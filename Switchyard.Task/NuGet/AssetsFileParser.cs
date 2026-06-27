@@ -45,7 +45,7 @@ public sealed class AssetsFileParser
 
     /// <summary>
     /// Returns the <see cref="LockFileTarget"/> matching the supplied target
-    /// framework string (e.g. <c>net8.0</c>).
+    /// framework string (e.g. <c>net10.0</c>).
     /// </summary>
     public LockFileTarget? GetTarget(string targetFramework)
     {

@@ -170,7 +170,7 @@ Switchyard.nupkg
 ├── build/
 │   ├── Switchyard.props     # defines SwitchyardEnabled / SwitchyardSilent
 │   └── Switchyard.targets   # registers the three pipeline phases
-└── tasks/net8.0/
+└── tasks/net10.0/
     ├── Switchyard.Task.dll  # the MSBuild task assembly
     ├── AsmResolver.*.dll    # metadata + PDB read/write
     └── NuGet.*.dll          # silent routed-version download

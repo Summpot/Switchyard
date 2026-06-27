@@ -342,7 +342,7 @@ Level 2/3 sample if the feature changes the file stream or runtime behaviour.
 ## 6. Coding conventions
 
 * **Language/framework:** C# latest, .NET 8.0, `Nullable` enabled, `ImplicitUsings`
-  enabled. The task assembly targets `net8.0`.
+  enabled. The task assembly targets `net10.0`.
 * **Comments:** XML doc comments (`///`) on every public type and member.
   Design context lives as inline comments at the relevant location in the
   source (not in separate design documents).

@@ -345,7 +345,7 @@ public static class BuildUtility
     /// <summary>
     /// Locates the built executable for a test sample project.
     /// </summary>
-    public static string FindBuiltExecutable(string projectName, string configuration = "Debug", string framework = "net8.0")
+    public static string FindBuiltExecutable(string projectName, string configuration = "Debug", string framework = "net10.0")
     {
         string projectDir = Path.Combine(TestSamplesPath, projectName);
         string exeName = OperatingSystem.IsWindows() ? projectName + ".exe" : projectName;
@@ -356,7 +356,7 @@ public static class BuildUtility
     /// <summary>
     /// Returns the bin output directory for a test sample project.
     /// </summary>
-    public static string GetBinDirectory(string projectName, string configuration = "Debug", string framework = "net8.0")
+    public static string GetBinDirectory(string projectName, string configuration = "Debug", string framework = "net10.0")
     {
         string projectDir = Path.Combine(TestSamplesPath, projectName);
         return Path.Combine(projectDir, "bin", configuration, framework);
@@ -365,7 +365,7 @@ public static class BuildUtility
     /// <summary>
     /// Returns the publish output directory for a test sample project.
     /// </summary>
-    public static string GetPublishDirectory(string projectName, string configuration = "Release", string framework = "net8.0")
+    public static string GetPublishDirectory(string projectName, string configuration = "Release", string framework = "net10.0")
     {
         string projectDir = Path.Combine(TestSamplesPath, projectName);
         return Path.Combine(projectDir, "bin", configuration, framework, "publish");

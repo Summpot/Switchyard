@@ -41,7 +41,7 @@ public class NativeAotBindingTests
             "NativeAotBindingApp",
             "obj",
             "Release",
-            "net8.0",
+            "net10.0",
             BuildUtility.HostRuntimeIdentifier,
             "native");
         string rspPath = Path.Combine(objDir, "NativeAotBindingApp.ilc.rsp");
@@ -54,7 +54,7 @@ public class NativeAotBindingTests
         string publishDir = BuildUtility.GetPublishDirectory(
             "NativeAotBindingApp",
             "Release",
-            "net8.0",
+            "net10.0",
             BuildUtility.HostRuntimeIdentifier);
         string exeName = OperatingSystem.IsWindows() ? "NativeAotBindingApp.exe" : "NativeAotBindingApp";
         string exePath = Path.Combine(publishDir, exeName);
