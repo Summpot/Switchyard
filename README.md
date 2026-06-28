@@ -17,11 +17,14 @@ trips its version-loader conflict check.
 ## How it works (in one paragraph)
 
 You add a `<SwitchyardRoutes>` metadata entry to a `<PackageReference>` in your
-`.csproj`. During `dotnet build` / `dotnet publish`, Switchyard's MSBuild task
-intercepts the file stream that MSBuild is about to copy to the output
-directory, fetches any missing routed versions from NuGet, renames the target
-DLLs (and their `.pdb`s), rewrites every caller's `AssemblyReferences` to point
-at the renamed assemblies, rewrites `DllImport` entries and ships renamed native
+`.csproj`. During `dotnet restore`, a Switchyard restore-time target turns the
+routed versions into multi-version `<PackageDownload>` items so NuGet itself
+fetches them into the global packages folder. During `dotnet build` /
+`dotnet publish`, Switchyard's MSBuild task intercepts the file stream that
+MSBuild is about to copy to the output directory, locates the already-restored
+routed versions (read-only — it never downloads), renames the target DLLs (and
+their `.pdb`s), rewrites every caller's `AssemblyReferences` to point at the
+renamed assemblies, rewrites `DllImport` entries and ships renamed native
 libraries for routed packages that carry a native dependency, injects the
 renamed assemblies into `deps.json`'s TPA list, and strips the originals back out
 of the publish stream. The result lands in `bin` / `publish` with the rewritten
@@ -29,18 +32,29 @@ files in place — incremental builds and `dotnet publish` keep working unchange
 
 ## Installation
 
-Add the Switchyard package to the **main application** project that owns the
-routing rules:
+Switchyard ships as a **project SDK**, not a plain `PackageReference`. Reference
+it from the **main application** project that owns the routing rules by adding
+`Switchyard` to the `Sdk` attribute:
 
 ```xml
-<ItemGroup>
-  <PackageReference Include="Switchyard" Version="1.0.0" />
-</ItemGroup>
+<Project Sdk="Microsoft.NET.Sdk;Switchyard">
+  …
+</Project>
 ```
 
-That single reference auto-imports `Switchyard.props` / `Switchyard.targets`,
-which register the weaving pipeline. No changes are needed on the dependency
-side.
+Pin the SDK version via `global.json` so the build is reproducible:
+
+```json
+{
+  "msbuild-sdks": { "Switchyard": "1.0.0" }
+}
+```
+
+That SDK reference auto-imports `Sdk.props` / `Sdk.targets`, which register the
+weaving pipeline. No changes are needed on the dependency side. (The SDK form is
+not cosmetic: only SDK imports survive `ExcludeRestorePackageImports` during the
+restore-traversal evaluation, which is what lets Switchyard inject the routed
+versions into restore.)
 
 ## Configuration
 
@@ -120,15 +134,16 @@ is exactly what the `InvalidCastApp` test sample proves (see
 ## Native library isolation
 
 Packages that ship a native dependency (e.g. **SkiaSharp**, the original
-motivation for Switchyard) are handled automatically — **including the common
-case where the native library lives in a separate "native assets" package**.
-When you route `SkiaSharp`, Switchyard follows the full dependency chain:
+motivation for Switchyard) are handled — **including the common case where the
+native library lives in a separate "native assets" package**. When you route
+the managed package, Switchyard follows its declared dependency chain:
 
-* it parses `SkiaSharp`'s `.nuspec` and resolves each transitive dependency;
+* it parses the routed package's `.nuspec` and resolves each transitive
+  dependency (read-only — it never downloads);
 * any dependency that actually contains a `runtimes/{rid}/native/` folder
-  (SkiaSharp ships `libskiasharp` via the transitive
-  `SkiaSharp.NativeAssets.Win32` / `.Linux` / `.macOS` packages) is treated as
-  the native-asset provider;
+  (e.g. a managed package ships its native lib via a transitive
+  `{PackageId}.NativeAssets.{OS}` package) is treated as the native-asset
+  provider;
 * for each routed version it renames that native file to
   `{native}.Switchyard.{version}.{ext}` and rewrites the routed managed
   assembly's own `DllImport` module name to the renamed native name;
@@ -136,11 +151,32 @@ When you route `SkiaSharp`, Switchyard follows the full dependency chain:
 
 So each routed managed version binds its **own** native library, and two
 versions of a native-binding package no longer fight over a single native
-load. You route only the managed package (`SkiaSharp`); the native-asset
-packages are discovered and isolated without extra configuration. This is what
-makes the "use Avalonia while pulling in a higher SkiaSharp elsewhere" scenario
-work: Avalonia keeps its SkiaSharp, your other code uses the newer one, and the
-two `libskiasharp` copies coexist by name.
+load.
+
+### When the routed package's `.nuspec` omits a platform's native-assets dependency
+
+Some packages omit a platform's native-assets dependency from their `.nuspec`
+(a real-world packaging gap — e.g. SkiaSharp's `.nuspec` declares the Win32 and
+macOS native-assets packages for the .NET target frameworks but omits the Linux
+one, so `dotnet restore` does not pull it on its own). Switchyard deliberately
+does **not** infer the missing companion by naming convention — it has no
+knowledge of any package's native-assets naming. In that case the consumer
+restores that platform's routed native versions explicitly with a multi-version
+`<PackageDownload>` alongside the `<PackageReference>`:
+
+```xml
+<ItemGroup>
+  <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="2.88.8" />
+  <PackageDownload Include="SkiaSharp.NativeAssets.Linux" Version="[2.88.9];[3.116.1]" />
+</ItemGroup>
+```
+
+The `PackageReference` is the original native (the same one a plain app on that
+platform would reference); the `PackageDownload` asks NuGet to also fetch the
+routed native versions, which Switchyard then renames per routed managed
+version. On platforms where the routed package declares its native-assets
+transitively (Win32/macOS here), the `PackageDownload` is redundant but
+harmless.
 
 ## Known limitations
 
@@ -167,13 +203,14 @@ two `libskiasharp` copies coexist by name.
 
 ```
 Switchyard.nupkg
-├── build/
-│   ├── Switchyard.props     # defines SwitchyardEnabled / SwitchyardSilent
-│   └── Switchyard.targets   # registers the three pipeline phases
+├── Sdk/
+│   ├── Sdk.props          # defines SwitchyardEnabled / SwitchyardSilent
+│   └── Sdk.targets       # registers the three pipeline phases +
+│                          #   SwitchyardInjectRoutedPackageDownloads (pre-Restore)
 └── tasks/net10.0/
     ├── Switchyard.Task.dll  # the MSBuild task assembly
-    ├── AsmResolver.*.dll    # metadata + PDB read/write
-    └── NuGet.*.dll          # silent routed-version download
+    ├── AsmResolver.*.dll     # metadata + PDB read/write
+    └── NuGet.*.dll           # read-only package location (NO download)
 ```
 
 Everything under `tasks/` is loaded **only** by the MSBuild engine at build

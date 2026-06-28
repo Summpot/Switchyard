@@ -14,16 +14,18 @@ locations in the source; this document is the map.
 ## 1. Repository layout
 
 ```
-Switchyard/                       # The NuGet package project (build/ + tasks/)
-  Switchyard.csproj               # Packs build/*.props/targets + task DLLs
-  build/Switchyard.props          # Auto-imported: SwitchyardEnabled / Silent
-  build/Switchyard.targets        # The three pipeline phases (MSBuild wiring)
+Switchyard/                       # The project-SDK package project (Sdk/ + tasks/)
+  Switchyard.csproj               # Packs Sdk/Sdk.props + Sdk/Sdk.targets + task DLLs
+  Sdk/Sdk.props                   # Auto-imported: SwitchyardEnabled / Silent
+  Sdk/Sdk.targets                 # The three pipeline phases (MSBuild wiring)
+                                  #   + SwitchyardInjectRoutedPackageDownloads (pre-Restore hook)
 Switchyard.Task/                  # The MSBuild task assembly (built into tasks/)
   SwitchyardTask.cs               # Phase 1 task: weave + redirect + swap items
+  SwitchyardPackageDownloadInjectionTask.cs  # Restore-time task: emit PackageDownload for routed versions
   SwitchyardDepsPatcherTask.cs    # Phase 2 task: deps.json TPA injection
   SwitchyardPublishFilterTask.cs  # Phase 3 task: publish copy-local cleanup
   Configuration/                  # <SwitchyardRoutes>/<SwitchyardRouteGroup> parsing
-  NuGet/                          # project.assets.json + on-demand package download
+  NuGet/                          # project.assets.json + read-only package location (NO download)
   Pipeline/                       # Orchestration + deps.json patcher
   Weaver/                         # AsmResolver metadata rewriting
 test/
@@ -41,6 +43,8 @@ test/
       NativeBindingApp/           # managed+native isolation, stub fixture (+ NativeConsumerModule)
       SkiaSharpIsolationApp/      # real Avalonia+SkiaSharp scenario (+ SkiaSharpConsumerModule)
       ReflectionProbeApp/         # runtime-reflection dual-version probe
+      global.json                 # pins the Switchyard SDK version (1.0.0) for all samples
+      nuget.config                # local feed + nuget.org for the samples
   fixtures/                       # TargetLib / CommonUtils / NativeBindingLib
       TargetLib/               # packed at 1.0.0 / 2.0.0 / 3.5.0
       CommonUtils/             # TargetLib cascade dependency, by version
@@ -51,8 +55,19 @@ Switchyard.slnx                   # Solution (excludes TestSamples & fixtures)
 `Switchyard.slnx` includes the main package, the task assembly, the two test
 projects, and the TestFixtures library. The `TestSamples/**` and `fixtures/**`
 projects are intentionally **not** part of the solution — they are packed into
-a local NuGet feed at test time and consumed as `PackageReference`s by the
-samples. Do not add them to the solution.
+a local NuGet feed at test time and consumed by the samples. Do not add them to
+the solution.
+
+> **Project-SDK form (critical):** Switchyard ships as a **project SDK**, not a
+> plain `PackageReference`. Consumers reference it via
+> `<Project Sdk="Microsoft.NET.Sdk;Switchyard">` (and pin the version via
+> `global.json`'s `msbuild-sdks`). This is not cosmetic: a plain `build/`-layout
+> package's imports are suppressed by `ExcludeRestorePackageImports=true` during
+> the restore-traversal evaluation, so it cannot inject items into restore. The
+> SDK form's `Sdk.props`/`Sdk.targets` are imported even during restore, which is
+> what lets the `SwitchyardInjectRoutedPackageDownloads` target add
+> `<PackageDownload>` items for the routed versions and have NuGet actually
+> restore them. See §2.
 
 ---
 
@@ -61,13 +76,18 @@ samples. Do not add them to the solution.
 Switchyard intercepts MSBuild's internal file-item collections rather than
 overwriting files in an `AfterBuild` step, so incremental builds and
 `dotnet publish` keep working. Three phases, each a separate MSBuild target in
-`Switchyard/build/Switchyard.targets`:
+`Switchyard/Sdk/Sdk.targets`:
 
 | Phase | Target                       | Task                            | When (MSBuild)                                                                                |
 | ----- | ---------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------- |
 | 1     | `ExecuteSwitchyardWeaving`   | `SwitchyardTask`                | `AfterTargets="CoreCompile"`, `BeforeTargets="CopyFilesToOutputDirectory;ComputeFilesToPublish"` |
 | 2     | `PatchSwitchyardDepsJson`    | `SwitchyardDepsPatcherTask`     | `AfterTargets="GenerateBuildDependencyFile;GeneratePublishDependencyFile"`, `BeforeTargets="ComputeFilesToPublish"` |
 | 3     | `SwitchyardPublishCleanup`   | `SwitchyardPublishFilterTask`   | `BeforeTargets="_ComputeResolvedCopyLocalPublishAssets"`                                       |
+
+There is also a **restore-time** target (not a pipeline phase, but the thing
+that feeds the pipeline):
+
+| Pre-Restore | `SwitchyardInjectRoutedPackageDownloads` | `SwitchyardPackageDownloadInjectionTask` | `BeforeTargets="CollectPackageDownloads"` |
 
 **Why these exact hook points (critical):**
 
@@ -84,14 +104,57 @@ overwriting files in an `AfterBuild` step, so incremental builds and
   back out of both `@(ReferenceCopyLocalPaths)` and
   `@(_ResolvedCopyLocalPublishAssets)` right before the publish asset list is
   finalised.
+* The pre-restore injection must hook `BeforeTargets="CollectPackageDownloads"`,
+  **not** `Restore`. The actual package-download collection happens in the
+  restore-traversal evaluation (`_GenerateProjectRestoreGraphPerFramework` →
+  `_CollectRestoreInputs` → `CollectPackageDownloads`), which does **not**
+  build `Restore`. `BeforeTargets="Restore"` only fires in the top-level
+  evaluation; the `PackageDownload` items it emits never reach the traversal
+  that feeds NuGet's resolver. `CollectPackageDownloads` runs in **both** the
+  top-level and the traversal evaluations, so hooking there guarantees the
+  injected items are seen by the resolver. This is the whole reason Switchyard
+  ships as a project SDK — only SDK imports survive `ExcludeRestorePackageImports`
+  in the traversal evaluation, so only the SDK form can inject into restore.
 
 If you change the wiring, re-derive the hook points from this table and
 re-verify with the Level 2 tests.
 
+### Restore model (no download)
+
+Switchyard **never downloads packages itself**. The weaving task's
+`PackageResolver` is read-only: it locates a version in the global packages
+folder and returns `null` if NuGet did not restore it (the caller surfaces a
+clear error rather than silently fetching). All restore behaviour — sources,
+credentials, proxy, offline mode, caching — stays entirely NuGet's. There is
+no second, partial NuGet client inside the build task.
+
+The routed versions are brought into the restore graph by the
+`SwitchyardInjectRoutedPackageDownloads` target: it parses each
+`<SwitchyardRoutes>` table, and for every routed (non-original) version emits a
+multi-version `<PackageDownload Include="{PackageId}" Version="[v1];[v2]…">`
+item. NuGet's multi-version `PackageDownload` is what lets several versions of
+the same package sit in the global packages folder at once — something a plain
+`PackageReference` cannot express.
+
+**Scope of the injection:** only the exact routed versions the consumer
+declared in `SwitchyardRoutes`. Switchyard deliberately does **not** infer or
+expand anything else — in particular it contains no knowledge of any package's
+native-assets naming convention and never expands a companion package on its
+own. A routed package's *declared* native-asset dependencies are restored
+transitively by NuGet (because the routed package's own `.nuspec` declares
+them). When a routed package's `.nuspec` omits a platform's native-asset
+dependency, the **consumer** is responsible for restoring that platform's
+routed native versions, by adding the matching multi-version
+`<PackageDownload>` entry alongside the `<PackageReference>` (see
+`SkiaSharpIsolationApp` for the concrete pattern). All package-specific
+knowledge stays on the consumer side; Switchyard itself is free of any
+package-naming assumptions.
+
 ### Phase 1 internals (`SwitchyardPipeline.Execute`)
 
 1. **Resolve** on-disk package directories for every routed version
-   (`PackageResolver` — auto-downloads missing versions via NuGet.Protocol).
+   (`PackageResolver.GetPackageDirectory` — read-only locate, no download;
+   missing ⇒ clear error).
 2. **Rename** each non-original target to `{Pkg}.Switchyard.{ver}` and copy its
    `.pdb` (`AssemblyWeaver.PrepareAndRename`). The original version declared on
    the `<PackageReference>` is already restored by NuGet and is *not* renamed.
@@ -131,23 +194,40 @@ The `DllImport` target lives inside the routed package's own managed assembly
 (not in its callers), so the native-name rewrite must be applied to the
 **prepared target assembly** after `PrepareAndRename`, not only to callers.
 `SwitchyardPipeline.PrepareNativeLibraries` discovers native libs under
-`runtimes/{rid}/native/` for the host RID, derives the `DllImport` module name
-(the file basename without extension — .NET does NOT add a `lib` prefix on
-resolve, so the import name already matches the file basename, e.g.
-SkiaSharp's `libSkiaSharp`), renames the file to
+`runtimes/{rid}/native/` for the host RID (with RID-graph fallback — see
+below), derives the `DllImport` module name (the file basename without
+extension — .NET does NOT add a `lib` prefix on resolve, so the import name
+already matches the file basename), renames the file to
 `{name}.Switchyard.{version}.{ext}` preserving on-disk casing, and rewrites
 the routed assembly's `ModuleRef` rows via
 `ReferenceRedirector.RewritePInvokeModules`.
 
 Real packages split their native dependency across a separate "native assets"
-package (SkiaSharp ships `libskiasharp` via the transitive
-`SkiaSharp.NativeAssets.Win32` / `.Linux` / `.macOS` packages, not inside the
-`SkiaSharp` package). Switchyard follows the full dependency chain
-automatically: it parses the routed package's `.nuspec`, resolves each declared
-dependency at its declared version, and treats any dependency that actually
-contains a `runtimes/{rid}/native/` folder as a native-asset provider. The user
-routes only the managed package (e.g. `SkiaSharp`); the native-asset packages
-are discovered and isolated without extra configuration.
+package (e.g. a managed package ships its native lib via a transitive
+`{PackageId}.NativeAssets.{OS}` package, not inside the managed package).
+Switchyard follows the declared dependency chain automatically: it parses the
+routed package's `.nuspec`, resolves each declared dependency at its declared
+version (read-only locate), and treats any dependency that actually contains a
+`runtimes/{rid}/native/` folder as a native-asset provider. The user routes
+only the managed package; the native-asset packages the managed package
+**declares** are discovered and isolated without extra configuration.
+
+When a routed package's `.nuspec` omits a platform's native-asset dependency
+(a real-world packaging gap — see `SkiaSharpIsolationApp` for the concrete
+case), Switchyard does **not** infer the missing companion by convention. The
+consumer restores that platform's routed native versions explicitly with a
+multi-version `<PackageDownload>` (see `SkiaSharpIsolationApp.csproj`). This
+keeps all package-naming knowledge on the consumer side; Switchyard is free of
+any `.NativeAssets.*` convention assumption.
+
+#### RID-graph fallback
+
+Some packages ship natives only under the OS-only RID
+(`runtimes/osx/native/`) rather than the full host RID
+(`runtimes/osx-arm64/native/`). .NET resolves natives by walking the RID graph
+from most- to least-specific; `NativeRuntimeDirCandidates` mirrors that
+fallback (full RID, then the OS-only prefix) so Switchyard discovers the same
+native file the runtime would load, without hardcoding any package or RID.
 
 The original native libs are stripped from the copy-local stream (and from
 publish) via `SwitchyardPublishFilterTask.BlockedNativeFileNames`.
@@ -314,8 +394,6 @@ Covers the three core algorithms:
 
 ### Edge/matrix tests always in the suite
 
-* shadow hot-download — a route referencing a version absent from the
-  global cache; `PackageResolver` fetches it from NuGet upstream.
 * RouteGroup cascade — deep-inspect the renamed DLL and assert its
   internal reference has been cascaded.
 * boundary tearing — `InvalidCastApp` expects `InvalidCastException`,
@@ -331,6 +409,7 @@ Covers the three core algorithms:
 * **Windows:** Visual Studio with the C++ workload (for `cl.exe`), located via
   `vswhere`; `BuildUtility` initialises `vcvars64` itself.
 * **Linux:** `gcc` on PATH (preinstalled on `ubuntu-latest`).
+* **macOS:** `clang` on PATH (preinstalled on `macos-latest`).
 The native fixture is only built for the host RID, so each CI matrix runner
 builds its own native library.
 
@@ -357,8 +436,10 @@ Level 2/3 sample if the feature changes the file stream or runtime behaviour.
 * **MSBuild item mutation:** never overwrite `@(ReferenceCopyLocalPaths)`
   in-place without going through the task's output parameters — the targets
   file rebuilds the item group from the task output to preserve metadata.
-* **No new heavy dependencies.** AsmResolver + the NuGet Protocol stack are
-  the deliberate toolset. Do not introduce Fody, Mono.Cecil, or similar.
+* **No new heavy dependencies.** AsmResolver + the NuGet asset-file / packaging
+  libraries are the deliberate toolset. Do not introduce Fody, Mono.Cecil, or
+  similar. (The task no longer depends on `NuGet.Protocol` / `NuGet.Configuration`
+  — it never downloads; restore is entirely NuGet's.)
 
 ---
 
@@ -385,22 +466,24 @@ assembly or the `.targets`, the fixture purges the stale `switchyard` package
 from the global NuGet cache automatically — no manual cleanup needed locally.
 
 > **CI note:** CI must additionally clean `obj/` and the local NuGet cache for
-> the test stub packages before running, to force `NuGet.Protocol` to
-> re-resolve. See the GitHub Actions workflow (`.github/workflows/ci.yml`).
+> the test stub packages before running, so the freshly packed packages are
+> re-resolved. See the GitHub Actions workflow (`.github/workflows/ci.yml`).
 
 ---
 
 ## 8. CI contract
 
-1. **OS matrix:** run on **both** `windows-latest` and `ubuntu-latest`.
+1. **OS matrix:** run on `windows-latest`, `ubuntu-latest` **and `macos-latest`**.
    AsmResolver and MSBuild macros differ in trailing-slash / path-separator
-   behaviour between Windows and Linux — all integration tests must pass on
-   both.
+   behaviour between OSes, and the native-library fixture is built per host
+   RID — all integration tests must pass on all three.
 2. **Clean-cache contract:** before the test step, clean `obj/` and purge the
-   test stub packages from the global NuGet cache so `NuGet.Protocol`'s fetch
-   and resolve paths are exercised on every run.
+   test stub packages from the global NuGet cache so the freshly packed
+   packages are re-resolved. (Switchyard no longer downloads; routed versions
+   arrive via the injected `PackageDownload` items, so the re-resolve exercises
+   the full restore path on every run.)
 3. The CI workflow lives at `.github/workflows/ci.yml`; the publish workflow
-   lives at `.github/workflows/publish.yml`.
+   lives at `.github/workflows/publish.yml` and runs only on Linux.
 
 ---
 

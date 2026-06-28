@@ -300,14 +300,17 @@ public sealed class SwitchyardPipeline
 
                 // Read-only: the restore-time PackageDownload injection already
                 // fetched this routed version into the global packages folder.
-                // If it is missing the consumer's restore did not run (or the
-                // consumer forgot to reference a native-assets package for the
-                // host platform) — surface that rather than silently download.
+                // If it is missing the consumer's restore did not run, or a
+                // routed native-assets version was not restored (the consumer
+                // must add the matching multi-version PackageDownload for any
+                // platform-native package the routed package's .nuspec omits) —
+                // surface that rather than silently download.
                 var packageDir = _resolver.GetPackageDirectory(cfg.PackageId, version)
                     ?? throw new InvalidOperationException(
                         $"Switchyard routed package '{cfg.PackageId}' version '{version}' is not restored in the global packages folder. " +
                         "Run 'dotnet restore' (the Switchyard PackageDownload injection fetches routed versions automatically). " +
-                        "If this is a native-assets package, ensure the consumer references it directly (e.g. SkiaSharp.NativeAssets.Linux on Linux).");
+                        "If this is a native-assets package the routed package's .nuspec does not declare for the host platform, " +
+                        "add a multi-version <PackageDownload> for the routed native versions alongside the package reference.");
                 var sourceDll = _resolver.FindManagedAssembly(packageDir, _targetFramework);
                 if (sourceDll is null)
                     continue;

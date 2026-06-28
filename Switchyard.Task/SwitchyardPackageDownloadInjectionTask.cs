@@ -8,9 +8,10 @@ namespace Switchyard;
 /// <summary>
 /// Restore-time task that turns Switchyard's route table into
 /// <c>&lt;PackageDownload&gt;</c> items so NuGet itself fetches every routed
-/// version into the global packages folder. Switchyard's weaving task then
-/// only reads already-restored packages, never downloads — restore behaviour
-/// (sources, credentials, proxy, offline mode, caching) is entirely NuGet's.
+/// version of each routed package into the global packages folder. Switchyard's
+/// weaving task then only reads already-restored packages, never downloads —
+/// restore behaviour (sources, credentials, proxy, offline mode, caching) is
+/// entirely NuGet's.
 /// </summary>
 /// <remarks>
 /// This task runs from <c>Sdk.targets</c>, which as a project-SDK targets file
@@ -18,6 +19,20 @@ namespace Switchyard;
 /// (<c>ExcludeRestorePackageImports=true</c> suppresses <c>build/</c> package
 /// imports, not SDK imports). That is what makes routed-version restore
 /// possible from a package at all.
+/// </remarks>
+/// <remarks>
+/// Scope: the task only asks NuGet to restore the exact routed versions the
+/// consumer declared in <c>SwitchyardRoutes</c>. It deliberately does NOT infer
+/// or expand anything else — in particular it knows nothing about any package's
+/// native-assets naming convention. A routed package's declared
+/// native-asset dependencies are restored transitively by NuGet (because the
+/// routed package's own <c>.nuspec</c> declares them). When a routed package's
+/// <c>.nuspec</c> omits a platform's native-asset dependency, the consumer is
+/// responsible for restoring that platform's routed native versions, typically
+/// by adding the corresponding multi-version <c>&lt;PackageDownload&gt;</c>
+/// entry alongside the <c>&lt;PackageReference&gt;</c>. That keeps all package
+/// knowledge on the consumer side; Switchyard itself stays free of any
+/// package-specific naming assumptions.
 /// </remarks>
 public sealed class SwitchyardPackageDownloadInjectionTask : Task
 {
@@ -69,10 +84,11 @@ public sealed class SwitchyardPackageDownloadInjectionTask : Task
             return true;
         }
 
+        // One PackageDownload item per routed package id, Version = the
+        // multi-version list of its routed versions. No companion/native-assets
+        // expansion: that would require encoding a package-naming convention
+        // into the tool, which is out of scope (see the class remarks).
         var output = new List<ITaskItem>();
-
-        // Routed managed packages: one PackageDownload item per routed package
-        // id, Version = the multi-version list of its routed versions.
         foreach (var kv in routedVersionsByPackage)
         {
             var item = new TaskItem(kv.Key);
@@ -80,61 +96,8 @@ public sealed class SwitchyardPackageDownloadInjectionTask : Task
             output.Add(item);
         }
 
-        // Native-assets companion packages the consumer referenced directly:
-        // expand each to the routed versions of its managed counterpart. A
-        // companion is recognised by the {routedId}.NativeAssets.{platform}
-        // naming convention the package family itself uses — this only ever
-        // expands a package the consumer already opted into; Switchyard never
-        // invents or downloads a package that is not in the project.
-        if (PackageReferences is not null)
-        {
-            var seenCompanions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var reference in PackageReferences)
-            {
-                var id = reference.ItemSpec;
-                if (string.IsNullOrWhiteSpace(id))
-                    continue;
-
-                // Skip routed packages themselves (already handled above) and
-                // anything that carries its own SwitchyardRoutes.
-                if (routedVersionsByPackage.ContainsKey(id))
-                    continue;
-                if (!string.IsNullOrWhiteSpace(reference.GetMetadata("SwitchyardRoutes")))
-                    continue;
-
-                var managedId = ExtractNativeAssetsBase(id);
-                if (managedId is null)
-                    continue;
-                if (!routedVersionsByPackage.TryGetValue(managedId, out var versions))
-                    continue;
-
-                if (!seenCompanions.Add(id))
-                    continue;
-
-                var item = new TaskItem(id);
-                item.SetMetadata("Version", BuildMultiVersionRange(versions));
-                output.Add(item);
-            }
-        }
-
         RoutedPackageDownloads = output.ToArray();
         return true;
-    }
-
-    /// <summary>
-    /// Returns the managed package id that a native-assets package id belongs
-    /// to, or <c>null</c> when <paramref name="packageId"/> does not follow the
-    /// <c>{managedId}.NativeAssets.{platform}</c> naming convention. Used only
-    /// to expand a package the consumer already references to the routed
-    /// versions of its managed counterpart.
-    /// </summary>
-    private static string? ExtractNativeAssetsBase(string packageId)
-    {
-        const string marker = ".NativeAssets.";
-        int idx = packageId.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (idx <= 0)
-            return null;
-        return packageId.Substring(0, idx);
     }
 
     /// <summary>
