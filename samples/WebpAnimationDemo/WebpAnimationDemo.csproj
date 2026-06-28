@@ -19,7 +19,7 @@
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('OSX'))">osx-x64</RuntimeIdentifier>
   </PropertyGroup>
 
-  <Import Project="..\..\Switchyard\build\Switchyard.props" />
+  <Import Project="..\..\Switchyard\Sdk\Sdk.props" />
 
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.0.5" />
@@ -57,9 +57,14 @@
   </ItemGroup>
 
   <PropertyGroup>
+    <!--
+      Point at the locally built task DLL for development. UsingTask AssemblyFile
+      resolves this path relative to Sdk.targets (..\..\Switchyard\Sdk\), so from
+      the Sdk/ folder two ".." reach the repo root and Switchyard.Task\...
+    -->
     <SwitchyardTaskAssemblyDir>..\..\Switchyard.Task\bin\$(Configuration)\</SwitchyardTaskAssemblyDir>
   </PropertyGroup>
 
-  <Import Project="..\..\Switchyard\build\Switchyard.targets" />
+  <Import Project="..\..\Switchyard\Sdk\Sdk.targets" />
 
 </Project>

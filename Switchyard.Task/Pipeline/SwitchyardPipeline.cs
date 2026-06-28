@@ -298,7 +298,16 @@ public sealed class SwitchyardPipeline
                 if (isOriginal)
                     continue;
 
-                var packageDir = _resolver.EnsurePackageAvailableAsync(cfg.PackageId, version).GetAwaiter().GetResult();
+                // Read-only: the restore-time PackageDownload injection already
+                // fetched this routed version into the global packages folder.
+                // If it is missing the consumer's restore did not run (or the
+                // consumer forgot to reference a native-assets package for the
+                // host platform) — surface that rather than silently download.
+                var packageDir = _resolver.GetPackageDirectory(cfg.PackageId, version)
+                    ?? throw new InvalidOperationException(
+                        $"Switchyard routed package '{cfg.PackageId}' version '{version}' is not restored in the global packages folder. " +
+                        "Run 'dotnet restore' (the Switchyard PackageDownload injection fetches routed versions automatically). " +
+                        "If this is a native-assets package, ensure the consumer references it directly (e.g. SkiaSharp.NativeAssets.Linux on Linux).");
                 var sourceDll = _resolver.FindManagedAssembly(packageDir, _targetFramework);
                 if (sourceDll is null)
                     continue;
@@ -575,7 +584,9 @@ public sealed class SwitchyardPipeline
 
     private string? ResolvePackageDll(string packageId, string version)
     {
-        var packageDir = _resolver.EnsurePackageAvailableAsync(packageId, version).GetAwaiter().GetResult();
+        var packageDir = _resolver.GetPackageDirectory(packageId, version);
+        if (packageDir is null)
+            return null;
         return _resolver.FindManagedAssembly(packageDir, _targetFramework);
     }
 
@@ -903,17 +914,13 @@ public sealed class SwitchyardPipeline
             if (string.IsNullOrWhiteSpace(depId) || string.IsNullOrWhiteSpace(depVersion))
                 continue;
 
-            string depDir;
-            try
-            {
-                depDir = _resolver.EnsurePackageAvailableAsync(depId, depVersion).GetAwaiter().GetResult();
-            }
-            catch
-            {
-                // A transitive native-assets package that can't be resolved is
-                // skipped rather than failing the whole build.
+            // Read-only: a native-assets package that the consumer did not
+            // reference (and NuGet therefore did not restore) is skipped — a
+            // platform-specific package that doesn't apply to the host is
+            // expected to be absent. This never downloads.
+            var depDir = _resolver.GetPackageDirectory(depId, depVersion);
+            if (depDir is null)
                 continue;
-            }
 
             // A native-assets package may ship under the full host RID or the
             // OS-only RID (e.g. SkiaSharp.NativeAssets.macOS uses runtimes/osx/
@@ -950,15 +957,14 @@ public sealed class SwitchyardPipeline
             if (!seen.Add(nativePackageId))
                 continue;
 
-            string depDir;
-            try
-            {
-                depDir = _resolver.EnsurePackageAvailableAsync(nativePackageId, version).GetAwaiter().GetResult();
-            }
-            catch
-            {
+            // Read-only: the restore-time PackageDownload injection fetched the
+            // routed version of this native-assets package into the global
+            // packages folder. If it is not present, the consumer did not
+            // reference it (and NuGet did not restore it for the host platform),
+            // so skip it — never download.
+            var depDir = _resolver.GetPackageDirectory(nativePackageId, version);
+            if (depDir is null)
                 continue;
-            }
 
             // Fall back along the RID graph: some native-assets packages ship
             // under the OS-only RID (runtimes/osx/native/) rather than the full

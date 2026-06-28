@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk;Switchyard">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -11,7 +11,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Switchyard" Version="1.0.0" />
     <PackageReference Include="TargetLib" Version="2.0.0">
       <SwitchyardRoutes>RouteGroupApp=1.0.0</SwitchyardRoutes>
       <SwitchyardRouteGroup>AuthSandbox</SwitchyardRouteGroup>

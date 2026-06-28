@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk;Switchyard">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -12,13 +12,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Switchyard" Version="1.0.0" />
     <!--
       The declared SkiaSharp version (2.88.8) is the "original" — restored by
       NuGet but routed to nobody, so Switchyard blocks it from bin. The main app
       binds 2.88.9; SkiaSharpConsumerModule binds 3.116.1. Each routed version
       ships its own renamed libskiasharp native library, so the two SkiaSharp
       versions coexist in one process with independent native bindings.
+
+      The routed versions (2.88.9 / 3.116.1) are fetched by NuGet itself: the
+      Switchyard SDK's restore-time target injects PackageDownload items for
+      every routed version declared below (and for the native-assets companion
+      referenced below), so NuGet restores them into the global packages folder.
+      Switchyard's weaving task then only reads them — it never downloads.
     -->
     <PackageReference Include="SkiaSharp" Version="2.88.8">
       <SwitchyardRoutes>SkiaSharpIsolationApp=2.88.9;SkiaSharpConsumerModule=3.116.1</SwitchyardRoutes>
@@ -34,13 +39,28 @@
     plain (non-Switchyard) SkiaSharp app on Linux must reference it explicitly,
     and so must this sample. This is a consumer-side requirement of using
     SkiaSharp on Linux, not a Switchyard concern: Switchyard itself contains no
-    knowledge of any package's native-assets naming. Once the package is in the
-    restore graph, Switchyard discovers it via the same generic mechanism it
-    uses for the Win32 native assets on Windows and routes its own renamed
-    native lib per routed version. Only needed on Linux (gated by the host
-    runtime identifier); on Windows/macOS the native assets arrive transitively.
+    knowledge of any package's native-assets naming.
+
+    Because this package's id follows the {routedId}.NativeAssets.{platform}
+    naming of the routed SkiaSharp package family, the Switchyard restore-time
+    target expands this single reference to ALSO fetch the routed versions
+    (2.88.9 and 3.116.1) via a multi-version PackageDownload. That is how the
+    consumer ends up with several native-assets versions restored at once —
+    something a plain PackageReference cannot express. So the consumer only
+    references the original (2.88.8) once; Switchyard asks NuGet to restore the
+    routed native-assets versions automatically.
+
+    The reference is unconditional (no per-OS Condition) for two reasons:
+      1. The build runs as a plain "dotnet build" with no -r, so
+         $(RuntimeIdentifier) is empty at evaluation time and any
+         RuntimeIdentifier-based Condition would silently exclude the package
+         on Linux (the very platform that needs it).
+      2. The package only carries runtimes/linux-*/native/ assets, which MSBuild
+         does not copy to bin on Windows or macOS, so referencing it on those
+         platforms is a harmless no-op (a small extra restore, zero bin/output
+         impact) and Switchyard's provider scan ignores it for non-Linux RIDs.
   -->
-  <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('linux'))">
+  <ItemGroup>
     <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="2.88.8" />
   </ItemGroup>
 

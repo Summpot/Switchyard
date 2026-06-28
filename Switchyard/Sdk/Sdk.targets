@@ -1,6 +1,11 @@
 <Project>
 
   <PropertyGroup Condition="'$(SwitchyardEnabled)' == 'true'">
+    <!--
+      Sdk.targets lives under the package's Sdk/ subfolder (the NuGet project-SDK
+      convention), and the task DLLs ship under tasks/ at the package root — so
+      go up one level from this file to reach the package root, then into tasks/.
+    -->
     <_SwitchyardDefaultTaskAssemblyDir>$(MSBuildThisFileDirectory)..\tasks\</_SwitchyardDefaultTaskAssemblyDir>
     <SwitchyardTaskAssemblyDir Condition="'$(SwitchyardTaskAssemblyDir)' == ''">$(_SwitchyardDefaultTaskAssemblyDir)</SwitchyardTaskAssemblyDir>
     <_SwitchyardCoreTaskTargetFramework Condition="'$(NETCoreSdkVersion)' != ''">net$([System.Text.RegularExpressions.Regex]::Match('$(NETCoreSdkVersion)', '^[0-9]+').Value).0</_SwitchyardCoreTaskTargetFramework>
@@ -35,6 +40,67 @@
   <UsingTask TaskName="Switchyard.SwitchyardNativeAotDirectPInvokeFilterTask"
              AssemblyFile="$(SwitchyardTaskAssembly)"
              Condition="'$(SwitchyardEnabled)' == 'true' And '$(SwitchyardTaskAssembly)' != ''" />
+
+  <UsingTask TaskName="Switchyard.SwitchyardPackageDownloadInjectionTask"
+             AssemblyFile="$(SwitchyardTaskAssembly)"
+             Condition="'$(SwitchyardEnabled)' == 'true' And '$(SwitchyardTaskAssembly)' != ''" />
+
+  <!--
+    Pre-restore: inject PackageDownload items for every routed version so NuGet
+    itself fetches them into the global packages folder. Switchyard no longer
+    downloads anything at weave time — the Phase 1 task only reads
+    already-restored packages — so restore behaviour (sources, credentials,
+    proxy, offline mode, caching) is exactly NuGet's.
+
+    PackageDownload supports a multi-version "Version=[v1];[v2]" list, which is
+    how a consumer ends up with several versions of the same package (the
+    routed managed package and its native-assets companions) restored at once —
+    something a plain PackageReference cannot express.
+
+    This target lives in Sdk.targets (a project-SDK targets file), so it is
+    imported even during the restore-traversal evaluation where
+    ExcludeRestorePackageImports=true suppresses build/ package imports but NOT
+    SDK imports. That is the whole reason Switchyard ships as a project SDK
+    rather than a plain build/ package: only the SDK form lets it participate in
+    restore and inject the routed-version downloads.
+
+    The hook point is BeforeTargets="CollectPackageDownloads" (NOT "Restore"):
+    the actual package-download collection happens in the restore-traversal
+    evaluation, which runs the _GenerateProjectRestoreGraphPerFramework target
+    (not Restore). Restore itself only fires the traversal from the top-level
+    evaluation, so BeforeTargets="Restore" would run in the top-level
+    evaluation only and the PackageDownload items it emitted would never reach
+    the traversal that actually feeds NuGet's resolver. CollectPackageDownloads
+    runs in BOTH the top-level and the traversal evaluations (it is part of
+    _CollectRestoreInputs), so hooking there guarantees the injected
+    PackageDownload items are seen by the resolver.
+
+    The original version on each PackageReference is already restored by NuGet
+    and is excluded here. The task only asks NuGet to restore the exact routed
+    versions the consumer declared in SwitchyardRoutes, plus the routed
+    versions of any native-assets companion the consumer already referenced
+    directly (e.g. SkiaSharp.NativeAssets.Linux, which a plain SkiaSharp-on-
+    Linux app must reference anyway).
+  -->
+  <Target Name="SwitchyardInjectRoutedPackageDownloads"
+          BeforeTargets="CollectPackageDownloads"
+          Condition="'$(SwitchyardEnabled)' == 'true'
+                     And '$(SwitchyardTaskAssembly)' != ''
+                     And '$(DesignTimeBuild)' != 'true'">
+
+    <SwitchyardPackageDownloadInjectionTask PackageReferences="@(PackageReference)">
+      <Output TaskParameter="RoutedPackageDownloads"
+              ItemName="SwitchyardRoutedPackageDownloads" />
+    </SwitchyardPackageDownloadInjectionTask>
+
+    <ItemGroup Condition="'@(SwitchyardRoutedPackageDownloads)' != ''">
+      <PackageDownload Include="@(SwitchyardRoutedPackageDownloads)" />
+    </ItemGroup>
+
+    <Message Text="Switchyard: injected PackageDownload for @(SwitchyardRoutedPackageDownloads, ', ')"
+             Condition="'$(SwitchyardSilent)' != 'true' And '@(SwitchyardRoutedPackageDownloads)' != ''"
+             Importance="high" />
+  </Target>
 
   <!--
     Phase 1: weave/redirect.

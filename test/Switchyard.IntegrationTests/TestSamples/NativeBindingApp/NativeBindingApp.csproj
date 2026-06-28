@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk;Switchyard">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -12,7 +12,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Switchyard" Version="1.0.0" />
     <!--
       The declared version (2.0.0) is the "original" — it is restored by NuGet
       but routed to nobody, so Switchyard blocks it from bin. The two routed

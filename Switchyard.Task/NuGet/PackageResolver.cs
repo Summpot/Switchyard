@@ -1,56 +1,40 @@
-using NuGet.Common;
-using NuGet.Configuration;
 using NuGet.Frameworks;
 using NuGet.Packaging;
 using NuGet.Packaging.Core;
-using NuGet.Packaging.PackageExtraction;
-using NuGet.Protocol;
-using NuGet.Protocol.Core.Types;
 using NuGet.Versioning;
 
 namespace Switchyard.NuGet;
 
 /// <summary>
-/// Locates or downloads a specific NuGet package version and exposes the
-/// restored package directory on disk. The original version declared on the
-/// <c>&lt;PackageReference&gt;</c> is expected to already be present in the
-/// global packages folder after restore; any additional routed version is
-/// fetched on demand using <see cref="DownloadResource"/>.
+/// Locates packages in the global packages folder. Read-only: Switchyard never
+/// downloads — the restore-time <c>SwitchyardPackageDownloadInjectionTask</c>
+/// turns every routed version (and its native-assets companions) into
+/// <c>&lt;PackageDownload&gt;</c> items, so NuGet itself fetches them. The
+/// weaving task then only reads what NuGet already restored.
 /// </summary>
+/// <remarks>
+/// This keeps restore behaviour (sources, credentials, proxy, offline mode,
+/// caching semantics) entirely NuGet's: there is no second, partial NuGet
+/// client inside the build task. A package that is not present in the global
+/// packages folder means restore did not run (or the consumer forgot to
+/// reference the native-assets package for the host platform), and the caller
+/// is expected to surface a clear error rather than silently fetching.
+/// </remarks>
 public sealed class PackageResolver
 {
-    private static readonly ILogger NuGetLog = NullLogger.Instance;
     private readonly string _globalPackagesFolder;
-    private readonly ISettings _settings;
-    private readonly SourceRepository[] _repositories;
 
-    private PackageResolver(string globalPackagesFolder, ISettings settings, SourceRepository[] repositories)
+    private PackageResolver(string globalPackagesFolder)
     {
         _globalPackagesFolder = globalPackagesFolder;
-        _settings = settings;
-        _repositories = repositories;
     }
 
     /// <summary>
-    /// Creates a resolver using the supplied global packages folder and the
-    /// package sources declared in <c>nuget.config</c>.
+    /// Creates a resolver rooted at the supplied global packages folder (the
+    /// one recorded in <c>project.assets.json</c>, or NuGet's default).
     /// </summary>
     public static PackageResolver Create(string globalPackagesFolder, string? nugetConfigPath)
-    {
-        var settings = nugetConfigPath is not null && File.Exists(nugetConfigPath)
-            ? Settings.LoadSpecificSettings(Path.GetDirectoryName(nugetConfigPath)!, Path.GetFileName(nugetConfigPath))
-            : Settings.LoadDefaultSettings(Directory.GetCurrentDirectory());
-
-        var providers = Repository.Provider.GetCoreV3();
-        var sources = SettingsUtility.GetEnabledSources(settings).ToList();
-        if (sources.Count == 0)
-        {
-            sources.Add(new PackageSource("https://api.nuget.org/v3/index.json"));
-        }
-
-        var repos = sources.Select(s => Repository.CreateSource(providers, s)).ToArray();
-        return new PackageResolver(globalPackagesFolder, settings, repos);
-    }
+        => new(globalPackagesFolder);
 
     /// <summary>
     /// The global packages folder used by this resolver.
@@ -59,30 +43,20 @@ public sealed class PackageResolver
 
     /// <summary>
     /// Returns the on-disk package directory for <paramref name="packageId"/>/
-    /// <paramref name="version"/>. When the package is not yet present in the
-    /// global packages folder it is downloaded silently.
+    /// <paramref name="version"/>, or <c>null</c> when NuGet has not restored
+    /// that version. Does not download: callers should surface the missing
+    /// version so the consumer knows to run restore (or reference the
+    /// native-assets package for the host platform) rather than having
+    /// Switchyard silently fetch it.
     /// </summary>
-    public async Task<string> EnsurePackageAvailableAsync(
-        string packageId,
-        string version,
-        CancellationToken cancellationToken = default)
+    public string? GetPackageDirectory(string packageId, string version)
     {
         if (!NuGetVersion.TryParse(version, out var nugetVersion))
-            throw new InvalidOperationException($"'{version}' is not a valid NuGet version.");
+            return null;
 
-        var identity = new PackageIdentity(packageId, nugetVersion);
         var pathResolver = new VersionFolderPathResolver(_globalPackagesFolder);
         var installPath = pathResolver.GetInstallPath(packageId, nugetVersion);
-
-        if (Directory.Exists(installPath) && IsPackageExtracted(installPath))
-            return installPath;
-
-        var nupkgPath = pathResolver.GetPackageFilePath(packageId, nugetVersion);
-        if (File.Exists(nupkgPath) && Directory.Exists(installPath))
-            return installPath;
-
-        await DownloadAndExtractAsync(identity, installPath, cancellationToken);
-        return installPath;
+        return Directory.Exists(installPath) && IsPackageExtracted(installPath) ? installPath : null;
     }
 
     /// <summary>
@@ -110,73 +84,6 @@ public sealed class PackageResolver
 
         var bestDir = candidates.First(c => NuGetFramework.Comparer.Equals(c.Framework, best)).Path;
         return FindSingleManagedDll(bestDir);
-    }
-
-    private async Task DownloadAndExtractAsync(
-        PackageIdentity identity,
-        string installPath,
-        CancellationToken cancellationToken)
-    {
-        Directory.CreateDirectory(_globalPackagesFolder);
-
-        Exception? lastError = null;
-        foreach (var repo in _repositories)
-        {
-            try
-            {
-                var downloadResource = await repo.GetResourceAsync<DownloadResource>(cancellationToken);
-                var context = new PackageDownloadContext(new SourceCacheContext());
-                var result = await downloadResource.GetDownloadResourceResultAsync(
-                    identity, context, _globalPackagesFolder, NuGetLog, cancellationToken);
-
-                if (result.Status == DownloadResourceResultStatus.Available && result.PackageStream is not null)
-                {
-                    await ExtractToGlobalPackagesAsync(identity, repo.PackageSource.Source, result.PackageStream, installPath, cancellationToken);
-                    return;
-                }
-            }
-            catch (Exception ex)
-            {
-                lastError = ex;
-            }
-        }
-
-        throw new InvalidOperationException(
-            $"Failed to download package '{identity.Id}' version '{identity.Version}' from any configured source.",
-            lastError);
-    }
-
-    private async Task ExtractToGlobalPackagesAsync(
-        PackageIdentity identity,
-        string source,
-        Stream packageStream,
-        string installPath,
-        CancellationToken cancellationToken)
-    {
-        Directory.CreateDirectory(installPath);
-
-        // Use NuGet's standard PackageExtractor which correctly handles the
-        // full extraction (nupkg, nuspec, lib files, etc.) into the global
-        // packages folder layout.
-        var extractionContext = new PackageExtractionContext(
-            PackageSaveMode.Defaultv3,
-            PackageExtractionBehavior.XmlDocFileSaveMode,
-            clientPolicyContext: null,
-            NuGetLog);
-
-        var pathResolver = new VersionFolderPathResolver(_globalPackagesFolder);
-
-        await PackageExtractor.InstallFromSourceAsync(
-            source,
-            identity,
-            stream =>
-            {
-                packageStream.Seek(0, SeekOrigin.Begin);
-                return packageStream.CopyToAsync(stream, 8192, cancellationToken);
-            },
-            pathResolver,
-            extractionContext,
-            cancellationToken);
     }
 
     private static bool IsPackageExtracted(string installPath)

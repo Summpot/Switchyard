@@ -42,9 +42,21 @@ public class PackageSmokeTests
                 </configuration>
                 """);
 
+            // A project-SDK reference needs a version. Pin it via global.json so
+            // the sample project's Sdk="...;Switchyard" resolves to 1.0.0 from the
+            // local feed.
+            File.WriteAllText(Path.Combine(root, "global.json"),
+                """
+                {
+                  "msbuild-sdks": {
+                    "Switchyard": "1.0.0"
+                  }
+                }
+                """);
+
             File.WriteAllText(Path.Combine(root, "PackageSmokeApp.csproj"),
                 """
-                <Project Sdk="Microsoft.NET.Sdk">
+                <Project Sdk="Microsoft.NET.Sdk;Switchyard">
                   <PropertyGroup>
                     <OutputType>Exe</OutputType>
                     <TargetFramework>net10.0</TargetFramework>
@@ -54,7 +66,6 @@ public class PackageSmokeTests
                     <RestorePackagesPath>packages</RestorePackagesPath>
                   </PropertyGroup>
                   <ItemGroup>
-                    <PackageReference Include="Switchyard" Version="1.0.0" />
                     <PackageReference Include="TargetLib" Version="2.0.0">
                       <SwitchyardRoutes>PackageSmokeApp=1.0.0</SwitchyardRoutes>
                     </PackageReference>

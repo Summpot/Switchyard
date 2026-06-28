@@ -27,8 +27,19 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="build\Switchyard.props" PackagePath="build\Switchyard.props" />
-    <Content Include="build\Switchyard.targets" PackagePath="build\Switchyard.targets" />
+    <!--
+      Project-SDK layout (NuGet convention): Sdk.props/Sdk.targets live under
+      a Sdk/ subfolder at the package root (matching msbuild.sdk.extras,
+      mstest.sdk, etc.). MSBuild's SDK resolver imports
+      {packageRoot}\Sdk\Sdk.props / Sdk.targets — crucially, these imports are
+      NOT suppressed by ExcludeRestorePackageImports, so the
+      SwitchyardInjectRoutedPackageDownloads target runs even during the
+      restore-traversal evaluation and its PackageDownload items are seen by
+      NuGet. That is what lets a routed-version restore (multi-version
+      PackageDownload) work from a package, which the build/ layout could not.
+    -->
+    <Content Include="Sdk\Sdk.props" PackagePath="Sdk\Sdk.props" />
+    <Content Include="Sdk\Sdk.targets" PackagePath="Sdk\Sdk.targets" />
   </ItemGroup>
 
   <PropertyGroup>
