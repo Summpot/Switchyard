@@ -67,6 +67,18 @@ jobs:
             if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
           }
 
+      # ---------------------------------------------------------------------------
+      # samples/WebpAnimationDemo is in the solution as a dev demo and imports
+      # Sdk.targets with a dev-only override pointing SwitchyardTaskAssemblyDir
+      # at the locally-built Switchyard.Task\bin\$(Configuration)\ task DLL.
+      # <UsingTask> evaluates at parse time during restore, so the task DLL
+      # must exist on disk before restore runs. Build it in Debug (the default
+      # restore configuration) before the restore step so the UsingTask can
+      # load the assembly during the restore-traversal evaluation.
+      # ---------------------------------------------------------------------------
+      - name: Build Switchyard.Task (Debug, required before restore)
+        run: dotnet build Switchyard.Task/Switchyard.Task.csproj -c Debug
+
       - name: Restore
         run: dotnet restore Switchyard.slnx
 
