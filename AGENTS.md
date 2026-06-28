@@ -140,15 +140,20 @@ the same package sit in the global packages folder at once — something a plain
 declared in `SwitchyardRoutes`. Switchyard deliberately does **not** infer or
 expand anything else — in particular it contains no knowledge of any package's
 native-assets naming convention and never expands a companion package on its
-own. A routed package's *declared* native-asset dependencies are restored
-transitively by NuGet (because the routed package's own `.nuspec` declares
-them). When a routed package's `.nuspec` omits a platform's native-asset
-dependency, the **consumer** is responsible for restoring that platform's
-routed native versions, by adding the matching multi-version
-`<PackageDownload>` entry alongside the `<PackageReference>` (see
-`SkiaSharpIsolationApp` for the concrete pattern). All package-specific
-knowledge stays on the consumer side; Switchyard itself is free of any
-package-naming assumptions.
+own.
+
+**A `<PackageDownload>` is leaf-level: NuGet restores the package itself but
+does not run transitive restore of the downloaded package's `.nuspec`
+dependencies.** A routed managed package's *declared* native-asset
+dependencies (e.g. `SkiaSharp.NativeAssets.Win32` listed in `SkiaSharp.nuspec`)
+are therefore not pulled in at the routed versions just because the managed
+package's routed version was downloaded. The **consumer** is responsible for
+restoring every routed native-assets version they want isolated, by adding
+matching multi-version `<PackageDownload>` entries alongside the
+`<PackageReference>` (see `SkiaSharpIsolationApp.csproj` for the concrete
+pattern, which adds three — one each for `SkiaSharp.NativeAssets.Linux`,
+`.Win32`, `.macOS`). All package-specific knowledge stays on the consumer side;
+Switchyard itself is free of any package-naming assumptions.
 
 ### Phase 1 internals (`SwitchyardPipeline.Execute`)
 

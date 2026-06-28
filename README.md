@@ -168,15 +168,23 @@ restores that platform's routed native versions explicitly with a multi-version
 <ItemGroup>
   <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="2.88.8" />
   <PackageDownload Include="SkiaSharp.NativeAssets.Linux" Version="[2.88.9];[3.116.1]" />
+  <PackageDownload Include="SkiaSharp.NativeAssets.Win32" Version="[2.88.9];[3.116.1]" />
+  <PackageDownload Include="SkiaSharp.NativeAssets.macOS" Version="[2.88.9];[3.116.1]" />
 </ItemGroup>
 ```
 
 The `PackageReference` is the original native (the same one a plain app on that
-platform would reference); the `PackageDownload` asks NuGet to also fetch the
-routed native versions, which Switchyard then renames per routed managed
-version. On platforms where the routed package declares its native-assets
-transitively (Win32/macOS here), the `PackageDownload` is redundant but
-harmless.
+platform would reference); each `PackageDownload` asks NuGet to also fetch the
+routed native versions for that platform, which Switchyard then renames per
+routed managed version. `<PackageDownload>` is leaf-level: NuGet downloads the
+package itself but does **not** trigger transitive restore of its `.nuspec`
+dependencies, so the routed versions of any companion native-assets package
+must be requested explicitly even when the routed managed package's `.nuspec`
+would declare them on the original version. Without these `PackageDownload`
+entries on every platform that ships a native-assets companion, the routed
+native lib will not be renamed and the bin dir will be missing
+`libSkiaSharp.Switchyard.{version}.dll` (the integration tests on a fresh CI
+runner would fail on Windows/macOS).
 
 ## Known limitations
 

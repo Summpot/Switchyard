@@ -31,7 +31,7 @@
   </ItemGroup>
 
   <!--
-    SkiaSharp's .nuspec declares the Win32 and macOS native-assets packages as
+    SkiaSharp's .nuspec declares Win32 and macOS native-assets packages as
     dependencies for the .NET target frameworks, but deliberately omits the
     Linux one (the Linux native lib depends on distro-specific system
     libraries, so Microsoft leaves it to the consumer to opt in). As a result
@@ -42,34 +42,39 @@
     knowledge of any package's native-assets naming and does not infer or
     expand companion packages.
 
-    Two references are needed here:
+    The routed native-assets versions must be brought in for ALL platforms,
+    not just Linux. Switchyard's injection task only asks NuGet to restore the
+    routed versions declared in SwitchyardRoutes (the managed SkiaSharp
+    package); it deliberately does NOT infer native-assets companions. And
+    PackageDownload itself is a leaf-level restore: it does NOT trigger
+    transitive restore of the downloaded package's nuspec-declared deps, so
+    even though SkiaSharp 2.88.9's nuspec lists SkiaSharp.NativeAssets.Win32
+    2.88.9 as a dep, the routed version of that native-assets package is not
+    restored unless the consumer adds a PackageDownload for it. Without the
+    routed native-assets on disk, Switchyard's pipeline cannot rename the
+    native lib per routed managed version, and the bin dir is missing
+    libSkiaSharp.Switchyard.* on Windows/macOS (the integration tests on a
+    fresh CI runner would fail).
 
-    1. <PackageReference SkiaSharp.NativeAssets.Linux 2.88.8> — the ORIGINAL
-       native counterpart (matches the declared SkiaSharp 2.88.8 original),
-       the same reference a plain SkiaSharp-on-Linux app would have. NuGet
-       restores it; Switchyard blocks the original native from bin.
+    So the consumer adds three multi-version PackageDownload entries (one per
+    platform-native-assets package), each pinning the same routed versions as
+    the managed SkiaSharp route table. NuGet restores them; Switchyard
+    renames one per routed managed version.
 
-    2. <PackageDownload SkiaSharp.NativeAssets.Linux [2.88.9];[3.116.1]> — the
-       ROUTED native versions. Switchyard's injection task only asks NuGet to
-       restore the routed versions declared in SwitchyardRoutes (the managed
-       SkiaSharp package); it deliberately does NOT infer native-assets
-       companions. So the consumer explicitly adds a multi-version
-       PackageDownload for the routed native versions it wants isolated.
-       NuGet then restores them; Switchyard renames one per routed version.
-
-    On Windows/macOS the routed native versions are restored transitively
-    (the routed SkiaSharp's .nuspec declares Win32/macOS native-assets), so the
-    PackageDownload is redundant there but harmless. It is unconditional (no
-    per-OS Condition): the build runs as a plain "dotnet build" with no -r so
-    $(RuntimeIdentifier) is empty at evaluation time and any
-    RuntimeIdentifier-based Condition would silently exclude the package on
-    Linux (the very platform that needs it); and the package only carries
-    runtimes/linux-*/native/ assets, which MSBuild does not copy to bin on
-    Windows or macOS, so referencing it on those platforms is a no-op.
+    All three entries are unconditional (no per-OS Condition): the build runs
+    as a plain "dotnet build" with no -r so $(RuntimeIdentifier) is empty at
+    evaluation time and any RuntimeIdentifier-based Condition would silently
+    exclude the package on the very platform that needs it. The non-Linux
+    native-assets packages only carry runtimes/{non-linux}/* assets, which
+    MSBuild does not copy to bin on Linux, so referencing them on Linux is a
+    no-op; the Linux package similarly only carries runtimes/linux-* assets
+    which MSBuild does not copy on Windows or macOS.
   -->
   <ItemGroup>
     <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="2.88.8" />
     <PackageDownload Include="SkiaSharp.NativeAssets.Linux" Version="[2.88.9];[3.116.1]" />
+    <PackageDownload Include="SkiaSharp.NativeAssets.Win32" Version="[2.88.9];[3.116.1]" />
+    <PackageDownload Include="SkiaSharp.NativeAssets.macOS" Version="[2.88.9];[3.116.1]" />
   </ItemGroup>
 
   <ItemGroup>
