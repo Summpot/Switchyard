@@ -25,6 +25,25 @@
     </PackageReference>
   </ItemGroup>
 
+  <!--
+    SkiaSharp's .nuspec declares the Win32 and macOS native-assets packages as
+    dependencies for the .NET target frameworks, but deliberately omits the
+    Linux one (the Linux native lib depends on distro-specific system
+    libraries, so Microsoft leaves it to the consumer to opt in). As a result
+    dotnet restore does NOT pull SkiaSharp.NativeAssets.Linux on its own — a
+    plain (non-Switchyard) SkiaSharp app on Linux must reference it explicitly,
+    and so must this sample. This is a consumer-side requirement of using
+    SkiaSharp on Linux, not a Switchyard concern: Switchyard itself contains no
+    knowledge of any package's native-assets naming. Once the package is in the
+    restore graph, Switchyard discovers it via the same generic mechanism it
+    uses for the Win32 native assets on Windows and routes its own renamed
+    native lib per routed version. Only needed on Linux (gated by the host
+    runtime identifier); on Windows/macOS the native assets arrive transitively.
+  -->
+  <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('linux'))">
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="2.88.8" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\SkiaSharpConsumerModule\SkiaSharpConsumerModule.csproj" />
   </ItemGroup>

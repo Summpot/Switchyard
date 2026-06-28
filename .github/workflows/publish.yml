@@ -30,12 +30,8 @@ env:
 
 jobs:
   publish:
-    name: Publish (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2025-vs2026, ubuntu-latest]
+    name: Publish (linux)
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout

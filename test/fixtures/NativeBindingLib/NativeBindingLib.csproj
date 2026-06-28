@@ -20,18 +20,20 @@
     "libnativebinding.{dll|so|dylib}" (the "lib" prefix on every platform, since
     .NET does not add it on resolve) and lives under runtimes/{rid}/native/.
     At pack time the host OS determines which runtimes/ folder is populated by
-    the build step in BuildUtility.
+    the build step in BuildUtility. The RID and extension are derived from the
+    host so any win-*/linux-*/osx-* runner packs its own native without a
+    per-RID ItemGroup.
   -->
-  <ItemGroup Condition="'$(NativeRuntimeRID)' == 'win-x64'">
-    <Content Include="runtimes\win-x64\native\libnativebinding.dll"
-             Pack="true"
-             PackagePath="runtimes\win-x64\native\libnativebinding.dll" />
-  </ItemGroup>
+  <PropertyGroup>
+    <NativeLibExt Condition="$(NativeRuntimeRID.StartsWith('win'))">.dll</NativeLibExt>
+    <NativeLibExt Condition="$(NativeRuntimeRID.StartsWith('osx'))">.dylib</NativeLibExt>
+    <NativeLibExt Condition="$(NativeRuntimeRID.StartsWith('linux'))">.so</NativeLibExt>
+  </PropertyGroup>
 
-  <ItemGroup Condition="'$(NativeRuntimeRID)' == 'linux-x64'">
-    <Content Include="runtimes\linux-x64\native\libnativebinding.so"
+  <ItemGroup>
+    <Content Include="runtimes\$(NativeRuntimeRID)\native\libnativebinding$(NativeLibExt)"
              Pack="true"
-             PackagePath="runtimes\linux-x64\native\libnativebinding.so" />
+             PackagePath="runtimes\$(NativeRuntimeRID)\native\libnativebinding$(NativeLibExt)" />
   </ItemGroup>
 
 </Project>

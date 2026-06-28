@@ -1,10 +1,11 @@
 name: CI
 
-# Switchyard CI: build + the full test suite (Level 1/2/3) on BOTH Windows and
-# Linux. AsmResolver and MSBuild macros differ in trailing-slash / path
-# separator behaviour between the two OSes, so all integration tests must
-# pass on both. The clean-cache steps before the test run force NuGet.Protocol
-# to fetch and re-resolve on every run instead of serving stale cache entries.
+# Switchyard CI: build + the full test suite (Level 1/2/3) on Windows, Linux
+# and macOS. AsmResolver and MSBuild macros differ in trailing-slash / path
+# separator behaviour between OSes, and the native-library fixture is built
+# per host RID, so all integration tests must pass on all three. The
+# clean-cache steps before the test run force NuGet.Protocol to fetch and
+# re-resolve on every run instead of serving stale cache entries.
 
 on:
   push:
@@ -22,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
 
     steps:
       - name: Checkout

@@ -667,11 +667,17 @@ public sealed class SwitchyardPipeline
         // runtimes folders of its native-asset dependency packages.
         var seenDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var nativeDirs = new List<string>();
-        var ownNativeDir = Path.Combine(packageDir, "runtimes", rid, "native");
-        if (Directory.Exists(ownNativeDir))
+        // The routed package may ship its native file under the full host RID
+        // (runtimes/win-x64/native/) or the OS-only RID (runtimes/osx/native/,
+        // as SkiaSharp.NativeAssets.macOS does). .NET resolves natives by
+        // walking the RID graph from most- to least-specific; Switchyard
+        // mirrors that fallback (NativeRuntimeDirCandidates) so it finds the
+        // same native file the runtime would load.
+        foreach (var ridCandidate in NativeRuntimeDirCandidates(rid))
         {
-            nativeDirs.Add(ownNativeDir);
-            seenDirs.Add(ownNativeDir);
+            var ownNativeDir = Path.Combine(packageDir, "runtimes", ridCandidate, "native");
+            if (Directory.Exists(ownNativeDir) && seenDirs.Add(ownNativeDir))
+                nativeDirs.Add(ownNativeDir);
         }
 
         foreach (var depDir in ResolveNativeAssetDirs(packageDir, rid))
@@ -909,9 +915,15 @@ public sealed class SwitchyardPipeline
                 continue;
             }
 
-            var depNativeDir = Path.Combine(depDir, "runtimes", rid, "native");
-            if (Directory.Exists(depNativeDir))
-                yield return depNativeDir;
+            // A native-assets package may ship under the full host RID or the
+            // OS-only RID (e.g. SkiaSharp.NativeAssets.macOS uses runtimes/osx/
+            // native/). Fall back along the RID graph, same as the runtime does.
+            foreach (var ridCandidate in NativeRuntimeDirCandidates(rid))
+            {
+                var depNativeDir = Path.Combine(depDir, "runtimes", ridCandidate, "native");
+                if (Directory.Exists(depNativeDir))
+                    yield return depNativeDir;
+            }
         }
     }
 
@@ -948,9 +960,15 @@ public sealed class SwitchyardPipeline
                 continue;
             }
 
-            var depNativeDir = Path.Combine(depDir, "runtimes", rid, "native");
-            if (Directory.Exists(depNativeDir))
-                yield return depNativeDir;
+            // Fall back along the RID graph: some native-assets packages ship
+            // under the OS-only RID (runtimes/osx/native/) rather than the full
+            // host RID (runtimes/osx-arm64/native/).
+            foreach (var ridCandidate in NativeRuntimeDirCandidates(rid))
+            {
+                var depNativeDir = Path.Combine(depDir, "runtimes", ridCandidate, "native");
+                if (Directory.Exists(depNativeDir))
+                    yield return depNativeDir;
+            }
         }
     }
 
@@ -1032,17 +1050,50 @@ public sealed class SwitchyardPipeline
     {
         foreach (var versionDir in Directory.EnumerateDirectories(packageRoot))
         {
-            var nativeDir = Path.Combine(versionDir, "runtimes", rid, "native");
-            if (!Directory.Exists(nativeDir))
-                continue;
-
-            foreach (var nativeFile in Directory.EnumerateFiles(nativeDir))
+            // Fall back along the RID graph so a package that ships under the
+            // OS-only RID (runtimes/osx/native/) is recognised as a provider
+            // for the full host RID (osx-arm64).
+            foreach (var ridCandidate in NativeRuntimeDirCandidates(rid))
             {
-                if (pinvokeNames.Contains(Path.GetFileNameWithoutExtension(nativeFile)))
-                    return true;
+                var nativeDir = Path.Combine(versionDir, "runtimes", ridCandidate, "native");
+                if (!Directory.Exists(nativeDir))
+                    continue;
+
+                foreach (var nativeFile in Directory.EnumerateFiles(nativeDir))
+                {
+                    if (pinvokeNames.Contains(Path.GetFileNameWithoutExtension(nativeFile)))
+                        return true;
+                }
             }
         }
         return false;
+    }
+
+    /// <summary>
+    /// Returns the RID candidates to probe when looking for a package's native
+    /// assets, from most- to least-specific: the full host RID first, then the
+    /// OS-only RID (the part before the <c>-{arch}</c> suffix). .NET resolves
+    /// native libraries by walking the RID graph this way, and some packages
+    /// ship natives only under the OS-only RID (e.g.
+    /// <c>SkiaSharp.NativeAssets.macOS</c> uses <c>runtimes/osx/native/</c>
+    /// rather than <c>runtimes/osx-arm64/native/</c>). Mirroring that fallback
+    /// lets Switchyard discover the same native file the runtime would load,
+    /// without hardcoding any package or RID.
+    /// </summary>
+    private static IEnumerable<string> NativeRuntimeDirCandidates(string rid)
+    {
+        if (string.IsNullOrWhiteSpace(rid))
+            yield break;
+
+        yield return rid;
+
+        int dash = rid.IndexOf('-');
+        if (dash > 0)
+        {
+            string osOnly = rid.Substring(0, dash);
+            if (!string.IsNullOrEmpty(osOnly) && osOnly != rid)
+                yield return osOnly;
+        }
     }
 
     private static string GetPackageIdFromPackageDir(string packageDir)

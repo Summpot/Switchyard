@@ -211,6 +211,19 @@ public static class BuildUtility
                 throw new InvalidOperationException($"cl.exe failed for NativeBindingLib {version}:\n{result.StandardError}\n{result.StandardOutput}");
             try { File.Delete(batPath); File.Delete(objFile); } catch { }
         }
+        else if (OperatingSystem.IsMacOS())
+        {
+            // macOS: clang (the default system compiler) builds a .dylib with
+            // -dynamiclib. The file extension must be .dylib because .NET's
+            // native loader appends .dylib (not .so) when resolving DllImport
+            // on macOS, and Switchyard's rename preserves that extension.
+            string outDylib = Path.Combine(nativeOutDir, "libnativebinding.dylib");
+            var result = RunCommand("clang",
+                $"-dynamiclib -O2 -DNATIVE_VER={verConst} -o \"{outDylib}\" native.c",
+                fixtureDir);
+            if (!result.Success || !File.Exists(outDylib))
+                throw new InvalidOperationException($"clang failed for NativeBindingLib {version}:\n{result.StandardError}\n{result.StandardOutput}");
+        }
         else
         {
             string outSo = Path.Combine(nativeOutDir, "libnativebinding.so");
