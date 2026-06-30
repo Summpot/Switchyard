@@ -208,8 +208,15 @@ public static class ReferenceRedirector
 
     /// <summary>
     /// Returns the set of native library names referenced by the
-    /// <c>ModuleRef</c> rows backing the module's P/Invoke entries. Used to
-    /// detect which native libraries a managed assembly binds to.
+    /// <c>ModuleRef</c> rows that back the module's P/Invoke
+    /// (<c>DllImport</c>) entries. Used to detect which native libraries a
+    /// managed assembly actually binds to via P/Invoke — NOT every
+    /// <c>ModuleRef</c> in the module, since a <c>ModuleRef</c> can also
+    /// describe a managed netmodule or an unmanaged export scope that is never
+    /// the target of a <c>DllImport</c>. Only the modules referenced by an
+    /// <c>ImplementationMap</c> (<c>ImplMap</c>) row are returned, so the
+    /// caller never renames a native file whose basename coincidentally
+    /// collides with an unrelated <c>ModuleRef</c>.
     /// </summary>
     public static IReadOnlyCollection<string> GetPInvokeModuleNames(string assemblyPath)
     {
@@ -220,11 +227,22 @@ public static class ReferenceRedirector
         try
         {
             var module = ReadModule(assemblyPath);
-            foreach (var moduleRef in module.ModuleReferences)
+            // Walk every method's ImplementationMap (the ImplMap row that
+            // backs a DllImport) and collect the Scope (ModuleRef) name. This
+            // is the only reliable way to know which ModuleRef rows are
+            // actually P/Invoke targets — iterating module.ModuleReferences
+            // directly would also include module refs that are not DllImport
+            // scopes, and a coincidental basename collision could cause
+            // unrelated native files to be renamed and have their DllImports
+            // rewritten, corrupting the build.
+            foreach (var type in module.GetAllTypes())
             {
-                var name = moduleRef.Name?.Value;
-                if (name is not null)
-                    result.Add(name);
+                foreach (var method in type.Methods)
+                {
+                    var moduleName = method.ImplementationMap?.Scope?.Name?.Value?.ToString();
+                    if (!string.IsNullOrWhiteSpace(moduleName))
+                        result.Add(moduleName!);
+                }
             }
         }
         catch (BadImageFormatException)

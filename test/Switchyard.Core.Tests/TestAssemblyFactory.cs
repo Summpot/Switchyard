@@ -165,6 +165,54 @@ internal static class TestAssemblyFactory
     }
 
     /// <summary>
+    /// Creates an assembly that declares a P/Invoke method imported from the
+    /// supplied native library name, AND an extra <c>ModuleRef</c> that is NOT
+    /// the target of any <c>DllImport</c> (a "stray" module reference). Used to
+    /// verify <see cref="ReferenceRedirector.GetPInvokeModuleNames"/> returns
+    /// only the modules actually backing P/Invoke entries, not every
+    /// <c>ModuleRef</c> in the module.
+    /// </summary>
+    public static string CreateAssemblyWithPInvokeAndStrayModuleRef(
+        string outputPath,
+        string assemblyName,
+        string nativeLibraryName,
+        string strayModuleName,
+        string importName = "native_get_version")
+    {
+        var assembly = new AssemblyDefinition(assemblyName, new Version(1, 0, 0, 0));
+        var module = new ModuleDefinition(assemblyName + ".dll", KnownCorLibs.SystemRuntime_v8_0_0_0);
+        assembly.Modules.Add(module);
+
+        var moduleRef = new ModuleReference(nativeLibraryName);
+        module.ModuleReferences.Add(moduleRef);
+        // Add a stray ModuleRef that is NOT referenced by any ImplementationMap.
+        // GetPInvokeModuleNames must NOT report this name.
+        module.ModuleReferences.Add(new ModuleReference(strayModuleName));
+
+        var type = new TypeDefinition(
+            assemblyName, "NativeInterop",
+            TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed,
+            module.CorLibTypeFactory.Object.Type);
+        module.TopLevelTypes.Add(type);
+
+        var method = new MethodDefinition(
+            importName,
+            MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.PInvokeImpl,
+            MethodSignature.CreateStatic(module.CorLibTypeFactory.Int32),
+            verify: false);
+        method.ImplAttributes |=
+            MethodImplAttributes.PreserveSig |
+            MethodImplAttributes.Native;
+        method.ImplementationMap = new ImplementationMap(
+            moduleRef, importName, ImplementationMapAttributes.CallConvCdecl);
+
+        type.Methods.Add(method);
+
+        assembly.Write(outputPath);
+        return outputPath;
+    }
+
+    /// <summary>
     /// Computes the 8-byte public key token from a full public key using
     /// SHA-1 (same algorithm the CLR uses).
     /// </summary>

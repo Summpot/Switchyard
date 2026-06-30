@@ -211,11 +211,14 @@ Real packages split their native dependency across a separate "native assets"
 package (e.g. a managed package ships its native lib via a transitive
 `{PackageId}.NativeAssets.{OS}` package, not inside the managed package).
 Switchyard follows the declared dependency chain automatically: it parses the
-routed package's `.nuspec`, resolves each declared dependency at its declared
-version (read-only locate), and treats any dependency that actually contains a
-`runtimes/{rid}/native/` folder as a native-asset provider. The user routes
-only the managed package; the native-asset packages the managed package
-**declares** are discovered and isolated without extra configuration.
+routed package's `.nuspec`, selects the `<group targetFramework=...>` whose
+target framework is nearest to the project's `TargetFramework` (using NuGet's
+`FrameworkReducer`), resolves each declared dependency's version — which may be
+a range such as `[1.0.0, 2.0.0)` — to the actual restored version present in
+the global packages folder (read-only locate), and treats any dependency that
+actually contains a `runtimes/{rid}/native/` folder as a native-asset provider.
+The user routes only the managed package; the native-asset packages the managed
+package **declares** are discovered and isolated without extra configuration.
 
 When a routed package's `.nuspec` omits a platform's native-asset dependency
 (a real-world packaging gap — see `SkiaSharpIsolationApp` for the concrete
@@ -273,8 +276,10 @@ never scan method bodies.
   property), it instead re-signs the routed assembly with the user-provided
   key (see "Opt-in strong-name re-signing" below).
 * `AssemblyWeaver.StripStrongNameInPlace` — strips the strong name without
-  renaming (used when an original-version package participates in a group but
-  keeps its identity).
+  renaming. Available for callers that need to neutralise a strong name on an
+  original-version assembly; the pipeline's RouteGroup cascade currently skips
+  original versions entirely (they keep their identity), so this method is not
+  invoked by the production pipeline.
 * `StrongNameKey` — loads a `.snk` key pair, derives the public-key blob and
   8-byte token, and signs a delay-signed PE in place via AsmResolver's
   `StrongNameSigner` (pure managed, cross-platform — no `sn.exe`).
@@ -295,11 +300,12 @@ redirected caller `AssemblyReference` with the key's public key token, so the
 CLR binds the routed assembly by `(Name, Version, PublicKeyToken)`. A single
 key is shared across all routed versions (isolation comes from the routed
 assembly name, not the key). Signing is done in-process by AsmResolver's
-`StrongNameSigner` (SHA-1, the traditional strong-name algorithm). Original
-versions that keep their identity (`StripStrongNameInPlace`) are **not**
-re-signed — re-signing would change their token and break unrouted callers.
-After a RouteGroup cascade rewrites a routed assembly's own references, it is
-re-signed in place because the content changed.
+`StrongNameSigner` (SHA-1, the traditional strong-name algorithm). The
+RouteGroup cascade skips original versions entirely, so original-version
+assemblies are neither stripped nor re-signed — they keep their original
+identity and token so unrouted callers still bind. After a RouteGroup cascade
+rewrites a routed assembly's own references, it is re-signed in place because
+the content changed.
 
 ### Limitations baked into the design
 

@@ -138,8 +138,10 @@ motivation for Switchyard) are handled — **including the common case where the
 native library lives in a separate "native assets" package**. When you route
 the managed package, Switchyard follows its declared dependency chain:
 
-* it parses the routed package's `.nuspec` and resolves each transitive
-  dependency (read-only — it never downloads);
+* it parses the routed package's `.nuspec`, selects the dependency group
+  matching the project's target framework, and resolves each declared
+  dependency's version (which may be a range) to the actual restored version
+  (read-only — it never downloads);
 * any dependency that actually contains a `runtimes/{rid}/native/` folder
   (e.g. a managed package ships its native lib via a transitive
   `{PackageId}.NativeAssets.{OS}` package) is treated as the native-asset

@@ -5,6 +5,8 @@ using System.Runtime.InteropServices;
 using AsmResolver.DotNet;
 using AsmResolver.DotNet.Serialized;
 using System.Diagnostics;
+using NuGet.Frameworks;
+using NuGet.Versioning;
 
 namespace Switchyard.Pipeline;
 
@@ -179,6 +181,14 @@ public sealed class SwitchyardPipeline
     private readonly string _nativeAotDirectPInvokeMode;
     private readonly string? _strongNameKeyFile;
     private StrongNameKey? _strongNameKey;
+    // Cache of the package ids in the global packages folder that provide a
+    // native file matching a DllImport module name. Built lazily by
+    // DiscoverNativeProviderPackageIds on first use and shared across every
+    // routed version in the pipeline run, so the expensive full-folder scan
+    // (which enumerates every package id × version × native file) only happens
+    // once per build. Keyed by RID; value maps DllImport module basename (lower-
+    // cased) to the set of package ids that provide a matching native file.
+    private readonly Dictionary<string, Dictionary<string, List<string>>> _nativeProviderCacheByRid = new(StringComparer.OrdinalIgnoreCase);
 
     private SwitchyardPipeline(
         string intermediateDir,
@@ -460,8 +470,7 @@ public sealed class SwitchyardPipeline
                         signKey?.PublicKeyToken);
                     if (File.Exists(tempPath))
                     {
-                        File.Delete(dllPath);
-                        File.Move(tempPath, dllPath);
+                        AtomicMoveOnto(tempPath, dllPath);
 
                         // The cascade rewrote this routed assembly's own
                         // references, so the strong-name signature computed in
@@ -495,8 +504,6 @@ public sealed class SwitchyardPipeline
             var callerName = DetermineCallerName(callerPath);
             if (callerName is null)
                 continue;
-
-            System.Diagnostics.Debug.WriteLine($"Switchyard: examining caller {callerName} at {callerPath}");
 
             var redirections = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             // original package name -> routed assembly's actual AssemblyVersion,
@@ -537,16 +544,10 @@ public sealed class SwitchyardPipeline
             }
 
             if (redirections.Count == 0 && callerNativeRedirs.Count == 0)
-            {
-                System.Diagnostics.Debug.WriteLine($"Switchyard: no redirections for {callerName}");
                 continue;
-            }
 
             if (redirections.Count > 0 && !ReferenceRedirector.ReferencesAnyPackage(callerPath, allPackageNames))
-            {
-                System.Diagnostics.Debug.WriteLine($"Switchyard: {callerName} does not reference any routed package");
                 continue;
-            }
 
             var callerFileName = Path.GetFileName(callerPath);
             var outPath = Path.Combine(_intermediateDir, callerFileName);
@@ -583,14 +584,6 @@ public sealed class SwitchyardPipeline
             removedOriginalNativesByPackage[packageId] = bucket;
         }
         return bucket;
-    }
-
-    private string? ResolvePackageDll(string packageId, string version)
-    {
-        var packageDir = _resolver.GetPackageDirectory(packageId, version);
-        if (packageDir is null)
-            return null;
-        return _resolver.FindManagedAssembly(packageDir, _targetFramework);
     }
 
     /// <summary>
@@ -889,6 +882,17 @@ public sealed class SwitchyardPipeline
     /// (e.g. <c>SkiaSharp.NativeAssets.Win32</c> for <c>SkiaSharp</c>), instead of
     /// forcing the user to route the native-assets package explicitly.
     /// </summary>
+    /// <remarks>
+    /// Dependencies are read from the nuspec <c>&lt;group targetFramework=...&gt;</c>
+    /// that is nearest to the project's <c>TargetFramework</c> (using NuGet's
+    /// <c>FrameworkReducer</c>), not the union of all groups — because a
+    /// package may declare a native-assets dependency only for a specific TFM.
+    /// Version strings are parsed as <c>VersionRange</c>s (nuspec versions are
+    /// commonly ranges, e.g. <c>[1.0.0, 2.0.0)</c>); the actual restored version
+    /// on disk is located by scanning the dependency package's version
+    /// directories in the global packages folder and picking the highest one
+    /// that satisfies the range. An exact version is used as-is.
+    /// </remarks>
     private IEnumerable<string> ResolveNativeAssetDirs(string packageDir, string rid)
     {
         string packageId = GetPackageIdFromPackageDir(packageDir);
@@ -905,7 +909,7 @@ public sealed class SwitchyardPipeline
         IEnumerable<(string Id, string Version)> deps;
         try
         {
-            deps = ReadNuspecDependencies(nuspecPath);
+            deps = ReadNuspecDependencies(nuspecPath, _targetFramework);
         }
         catch
         {
@@ -917,11 +921,19 @@ public sealed class SwitchyardPipeline
             if (string.IsNullOrWhiteSpace(depId) || string.IsNullOrWhiteSpace(depVersion))
                 continue;
 
-            // Read-only: a native-assets package that the consumer did not
-            // reference (and NuGet therefore did not restore) is skipped — a
-            // platform-specific package that doesn't apply to the host is
-            // expected to be absent. This never downloads.
-            var depDir = _resolver.GetPackageDirectory(depId, depVersion);
+            // Resolve the actual on-disk version. nuspec dependency versions are
+            // commonly ranges (e.g. "[1.0.0, 2.0.0)" or "1.0.*"); PackageResolver
+            // only accepts a concrete NuGetVersion, so resolve the range to the
+            // highest restored version that satisfies it. Exact versions are used
+            // directly. A dependency the consumer did not reference (and NuGet
+            // therefore did not restore) is skipped — a platform-specific package
+            // that doesn't apply to the host is expected to be absent. This never
+            // downloads.
+            var resolvedVersion = ResolveDependencyVersion(depId, depVersion);
+            if (resolvedVersion is null)
+                continue;
+
+            var depDir = _resolver.GetPackageDirectory(depId, resolvedVersion);
             if (depDir is null)
                 continue;
 
@@ -935,6 +947,48 @@ public sealed class SwitchyardPipeline
                     yield return depNativeDir;
             }
         }
+    }
+
+    /// <summary>
+    /// Resolves a nuspec dependency version string (which may be a range such
+    /// as <c>[1.0.0, 2.0.0)</c> or a floating version like <c>1.0.*</c>) to the
+    /// actual restored version present in the global packages folder. Exact
+    /// versions are returned unchanged. For a range, the highest on-disk version
+    /// that satisfies the range is selected — mirroring what NuGet restore
+    /// itself resolved. Returns <c>null</c> when the version cannot be parsed
+    /// or no satisfying version is restored.
+    /// </summary>
+    private string? ResolveDependencyVersion(string packageId, string versionSpec)
+    {
+        // Fast path: an exact, parseable NuGet version (the common case for
+        // native-assets packages like SkiaSharp.NativeAssets.*). Avoids scanning
+        // the version directories when not needed.
+        if (NuGetVersion.TryParse(versionSpec, out var exact))
+            return exact.ToNormalizedString();
+
+        if (!VersionRange.TryParse(versionSpec, out var range))
+            return null;
+
+        // The dependency version is a range. Scan the package's version
+        // directories in the global packages folder and pick the highest
+        // restored version that satisfies the range — this is the version NuGet
+        // actually restored. Read-only: never downloads.
+        var packageRoot = Path.Combine(_resolver.GlobalPackagesFolder, packageId.ToLowerInvariant());
+        if (!Directory.Exists(packageRoot))
+            return null;
+
+        NuGetVersion? best = null;
+        foreach (var versionDir in Directory.EnumerateDirectories(packageRoot))
+        {
+            var dirName = Path.GetFileName(versionDir);
+            if (!NuGetVersion.TryParse(dirName, out var candidate))
+                continue;
+            if (!range.Satisfies(candidate))
+                continue;
+            if (best is null || candidate > best)
+                best = candidate;
+        }
+        return best?.ToNormalizedString();
     }
 
     /// <summary>
@@ -954,8 +1008,19 @@ public sealed class SwitchyardPipeline
         IReadOnlyList<string> callerPaths)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var nativePackageId in DiscoverNativeProviderPackageIdsFromCopyLocal(rid, pinvokeNames, callerPaths)
-                     .Concat(DiscoverNativeProviderPackageIds(rid, pinvokeNames)))
+        // Prefer the cheap, targeted scan of the actual copy-local stream
+        // (which only looks at files NuGet already resolved for this build).
+        // Only fall back to the expensive full-global-packages-folder scan
+        // when the copy-local scan found nothing — the full scan enumerates
+        // every package id × version × native file in the user's NuGet cache,
+        // which is O(packages × versions × files) and dominates build time on
+        // machines with large caches.
+        var copyLocalIds = DiscoverNativeProviderPackageIdsFromCopyLocal(rid, pinvokeNames, callerPaths).ToList();
+        var providerIds = copyLocalIds.Count > 0
+            ? copyLocalIds
+            : DiscoverNativeProviderPackageIds(rid, pinvokeNames).ToList();
+
+        foreach (var nativePackageId in providerIds)
         {
             if (!seen.Add(nativePackageId))
                 continue;
@@ -1040,42 +1105,62 @@ public sealed class SwitchyardPipeline
         if (!Directory.Exists(globalPackagesFolder))
             yield break;
 
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var packageRoot in Directory.EnumerateDirectories(globalPackagesFolder))
+        // Build (once per RID per pipeline run) an index that maps each
+        // DllImport module basename (lower-cased) to the set of package ids
+        // that contain a current-RID native file with that basename. This is
+        // expensive (it scans every package id × version × native file in the
+        // global NuGet cache), so it is cached on the pipeline instance and
+        // shared across every routed version. Only the fallback path
+        // (copy-local scan found nothing) reaches here.
+        if (!_nativeProviderCacheByRid.TryGetValue(rid, out var indexByBasename))
         {
-            var packageId = Path.GetFileName(packageRoot);
-            if (string.IsNullOrWhiteSpace(packageId) || !seen.Add(packageId))
-                continue;
-
-            if (ProvidesAnyNativeModule(packageRoot, rid, pinvokeNames))
-                yield return packageId;
-        }
-    }
-
-    private static bool ProvidesAnyNativeModule(
-        string packageRoot,
-        string rid,
-        ISet<string> pinvokeNames)
-    {
-        foreach (var versionDir in Directory.EnumerateDirectories(packageRoot))
-        {
-            // Fall back along the RID graph so a package that ships under the
-            // OS-only RID (runtimes/osx/native/) is recognised as a provider
-            // for the full host RID (osx-arm64).
-            foreach (var ridCandidate in NativeRuntimeDirCandidates(rid))
+            indexByBasename = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var packageRoot in Directory.EnumerateDirectories(globalPackagesFolder))
             {
-                var nativeDir = Path.Combine(versionDir, "runtimes", ridCandidate, "native");
-                if (!Directory.Exists(nativeDir))
+                var packageId = Path.GetFileName(packageRoot);
+                if (string.IsNullOrWhiteSpace(packageId))
                     continue;
 
-                foreach (var nativeFile in Directory.EnumerateFiles(nativeDir))
+                // Collect the set of native file basenames this package provides
+                // for the current RID (across all restored versions), then
+                // register the package id under each basename.
+                var basenamesForPackage = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var versionDir in Directory.EnumerateDirectories(packageRoot))
                 {
-                    if (pinvokeNames.Contains(Path.GetFileNameWithoutExtension(nativeFile)))
-                        return true;
+                    foreach (var ridCandidate in NativeRuntimeDirCandidates(rid))
+                    {
+                        var nativeDir = Path.Combine(versionDir, "runtimes", ridCandidate, "native");
+                        if (!Directory.Exists(nativeDir))
+                            continue;
+                        foreach (var nativeFile in Directory.EnumerateFiles(nativeDir))
+                            basenamesForPackage.Add(Path.GetFileNameWithoutExtension(nativeFile));
+                    }
+                }
+
+                foreach (var basename in basenamesForPackage)
+                {
+                    if (!indexByBasename.TryGetValue(basename, out var ids))
+                    {
+                        ids = new List<string>();
+                        indexByBasename[basename] = ids;
+                    }
+                    ids.Add(packageId);
                 }
             }
+            _nativeProviderCacheByRid[rid] = indexByBasename;
         }
-        return false;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pinvokeName in pinvokeNames)
+        {
+            if (!indexByBasename.TryGetValue(pinvokeName, out var ids))
+                continue;
+            foreach (var packageId in ids)
+            {
+                if (seen.Add(packageId))
+                    yield return packageId;
+            }
+        }
     }
 
     /// <summary>
@@ -1125,18 +1210,83 @@ public sealed class SwitchyardPipeline
 
     /// <summary>
     /// Extracts every <c>&lt;dependency id=... version=.../&gt;</c> entry from a
-    /// nuspec, across all dependency groups. Returns distinct (id, version)
-    /// pairs.
+    /// nuspec, selecting the <c>&lt;group targetFramework=...&gt;</c> whose
+    /// target framework is nearest to the supplied project target framework
+    /// (using NuGet's <c>FrameworkReducer</c>). Returns distinct
+    /// (id, version) pairs. When the nuspec declares no targetFramework on a
+    /// group (the legacy/default group), that group's dependencies are used as a
+    /// fallback.
     /// </summary>
-    private static IEnumerable<(string Id, string Version)> ReadNuspecDependencies(string nuspecPath)
+    /// <remarks>
+    /// NuGet restore itself selects dependencies per-TFM: a package may declare
+    /// a native-assets dependency only under <c>net8.0</c> and a different set
+    /// under <c>netstandard2.0</c>. Reading the union of all groups (the
+    /// previous behaviour) could surface dependencies for the wrong TFM and
+    /// either skip them (when their version is a range the literal parser
+    /// rejected) or resolve packages the actual restore did not. Selecting the
+    /// nearest group mirrors what NuGet did at restore time.
+    /// </remarks>
+    private static IEnumerable<(string Id, string Version)> ReadNuspecDependencies(
+        string nuspecPath,
+        string targetFramework)
     {
         var doc = System.Xml.Linq.XDocument.Load(nuspecPath);
-        // nuspec uses a default namespace; match dependency elements by local name.
-        foreach (var dep in doc.Descendants().Where(e => e.Name.LocalName == "dependency"))
+        // nuspec uses a default namespace; match elements by local name.
+        var groups = doc.Descendants()
+            .Where(e => e.Name.LocalName == "group")
+            .ToList();
+
+        // No groups: a flat <dependencies><dependency/></dependencies> layout.
+        // Return every dependency directly.
+        if (groups.Count == 0)
+        {
+            foreach (var dep in doc.Descendants().Where(e => e.Name.LocalName == "dependency"))
+            {
+                var id = dep.Attribute("id")?.Value;
+                var ver = dep.Attribute("version")?.Value;
+                if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(ver))
+                    yield return (id!, ver!);
+            }
+            yield break;
+        }
+
+        // Collect (framework, group-element) pairs. A group with no
+        // targetFramework attribute is the default/legacy group.
+        var candidates = new List<(NuGetFramework Framework, System.Xml.Linq.XElement Group)>();
+        System.Xml.Linq.XElement? defaultGroup = null;
+        foreach (var g in groups)
+        {
+            var tfmAttr = g.Attribute("targetFramework")?.Value;
+            if (string.IsNullOrWhiteSpace(tfmAttr))
+            {
+                defaultGroup = g;
+                continue;
+            }
+            candidates.Add((NuGetFramework.Parse(tfmAttr!), g));
+        }
+
+        // Select the nearest group to the project's target framework. Fall back
+        // to the default (no-targetFramework) group when no framework-specific
+        // group is compatible.
+        var projectFramework = NuGetFramework.Parse(targetFramework);
+        var reducer = new FrameworkReducer();
+        var nearest = reducer.GetNearest(projectFramework, candidates.Select(c => c.Framework));
+        System.Xml.Linq.XElement? selected = null;
+        if (nearest is not null)
+        {
+            selected = candidates.First(c => NuGetFramework.Comparer.Equals(c.Framework, nearest)).Group;
+        }
+        selected ??= defaultGroup;
+
+        if (selected is null)
+            yield break;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var dep in selected.Descendants().Where(e => e.Name.LocalName == "dependency"))
         {
             var id = dep.Attribute("id")?.Value;
             var ver = dep.Attribute("version")?.Value;
-            if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(ver))
+            if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(ver) && seen.Add(id!))
                 yield return (id!, ver!);
         }
     }
@@ -1155,8 +1305,7 @@ public sealed class SwitchyardPipeline
         ReferenceRedirector.RedirectReferences(assemblyPath, new Dictionary<string, string>(), tempPath, nativeRedirections);
         if (!File.Exists(tempPath))
             return;
-        File.Delete(assemblyPath);
-        File.Move(tempPath, assemblyPath);
+        AtomicMoveOnto(tempPath, assemblyPath);
 
         // The pdb stays valid: only the metadata ModuleRef names changed, not
         // the MVID or method bodies, so the existing .pdb still binds.
@@ -1244,6 +1393,41 @@ public sealed class SwitchyardPipeline
 
     private static string RoutedKey(string packageId, string version)
         => packageId + "/" + version;
+
+    /// <summary>
+    /// Atomically moves <paramref name="sourcePath"/> onto
+    /// <paramref name="destinationPath"/>, overwriting the destination. On
+    /// .NET 5+ this uses <c>File.Move(..., overwrite: true)</c> so the swap is
+    /// a single OS-level rename. On .NET Framework (net472) where the
+    /// overwrite overload is unavailable, it falls back to delete-then-move
+    /// but cleans up the temp source on failure so the intermediate directory
+    /// is not left in an inconsistent state. Either way the destination is
+    /// never left missing when the source exists.
+    /// </summary>
+    private static void AtomicMoveOnto(string sourcePath, string destinationPath)
+    {
+        try
+        {
+#if NET5_0_OR_GREATER
+            File.Move(sourcePath, destinationPath, overwrite: true);
+#else
+            // net472: File.Move has no overwrite overload. Delete first, then
+            // move. If the move fails the destination is missing — but the
+            // caller's temp source is preserved for cleanup below.
+            if (File.Exists(destinationPath))
+                File.Delete(destinationPath);
+            File.Move(sourcePath, destinationPath);
+#endif
+        }
+        catch
+        {
+            // Best-effort cleanup of the temp file so the intermediate
+            // directory is not left with a stale temp assembly.
+            try { if (File.Exists(sourcePath)) File.Delete(sourcePath); }
+            catch { }
+            throw;
+        }
+    }
 
     private static bool IsManagedAssembly(string path)
     {

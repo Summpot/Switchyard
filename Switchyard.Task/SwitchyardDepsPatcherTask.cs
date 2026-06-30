@@ -44,7 +44,13 @@ public sealed class SwitchyardDepsPatcherTask : Task
 
     public override bool Execute()
     {
-        if (string.IsNullOrWhiteSpace(DepsFilePath) || RoutedAssemblies is null || RoutedAssemblies.Length == 0)
+        // Validate required inputs before any work. A null/empty RoutedAssemblies
+        // with a valid deps file is a legitimate no-op (nothing to inject), so
+        // that path returns true. But a null DepsFilePath while routed
+        // assemblies exist is a wiring error — surface it rather than silently
+        // skipping TPA injection, which would produce a "successful" build that
+        // throws FileNotFoundException at runtime.
+        if (RoutedAssemblies is null || RoutedAssemblies.Length == 0)
             return true;
 
         var tuples = RoutedAssemblies
@@ -59,15 +65,39 @@ public sealed class SwitchyardDepsPatcherTask : Task
         if (tuples.Count == 0)
             return true;
 
+        if (string.IsNullOrWhiteSpace(DepsFilePath))
+        {
+            Log.LogError(
+                "Switchyard: {0} routed assembly(ies) require deps.json TPA injection but DepsFilePath is not set. " +
+                "The build would succeed but the app would throw FileNotFoundException at runtime for the routed assemblies.",
+                tuples.Count);
+            return false;
+        }
+
         var stripIds = StrippedOriginalPackageIds?
             .Select(i => i.ItemSpec)
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .ToList();
 
         int result = DepsJsonPatcher.AddRoutedAssemblies(DepsFilePath!, tuples, stripIds);
+        // AddRoutedAssemblies returns -1 when the deps file is missing or
+        // cannot be parsed. That is a real failure: the routed assemblies will
+        // not appear in the TPA list and the app will throw
+        // FileNotFoundException at runtime. Surface it as a build error rather
+        // than logging a message and returning success.
+        if (result < 0)
+        {
+            Log.LogError(
+                "Switchyard: failed to patch deps.json at '{0}' (result={1}). " +
+                "The file is missing or could not be parsed; the routed assemblies would not be in the TPA list " +
+                "and the app would throw FileNotFoundException at runtime.",
+                DepsFilePath, result);
+            return false;
+        }
+
         if (!Silent)
             Log.LogMessage(MessageImportance.High,
-                $"Switchyard: deps.json patch result={result} (path={DepsFilePath}, routed={tuples.Count}).");
+                $"Switchyard: deps.json patch added {result} routed assembly entr(ies) (path={DepsFilePath}, requested={tuples.Count}).");
         return true;
     }
 }

@@ -137,4 +137,19 @@ public class ConfigurationParserTests
         Assert.Equal("1.0.0", cfg.ResolveVersionForCaller("MainApp"));
         Assert.Equal("2.0.0", cfg.ResolveVersionForCaller("AnyOther"));
     }
+
+    [Fact]
+    public void Parse_ThrowsOnMissingVersion_WhenSwitchyardRoutesPresent()
+    {
+        // A PackageReference with SwitchyardRoutes but no Version is a
+        // configuration error. Previously the parser defaulted Version to "*",
+        // which caused IsOriginalVersion to never match and the pipeline to
+        // throw a misleading "package not restored" error. The parser now
+        // surfaces the real cause.
+        var item = new TaskItem("TargetLib");
+        item.SetMetadata("SwitchyardRoutes", "*=1.0.0");
+        // Version metadata is deliberately NOT set.
+
+        Assert.Throws<InvalidOperationException>(() => ConfigurationParser.Parse(new[] { item }));
+    }
 }

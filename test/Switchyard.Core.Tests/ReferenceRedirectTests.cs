@@ -161,4 +161,25 @@ public class ReferenceRedirectTests : IDisposable
         var names = ReferenceRedirector.GetPInvokeModuleNames(caller);
         Assert.Contains("nativebinding", names);
     }
+
+    [Fact]
+    public void GetPInvokeModuleNames_ExcludesModuleRefsNotBackingPInvoke()
+    {
+        // The assembly has a P/Invoke module ref "nativebinding" AND a stray
+        // ModuleRef "unrelated_module" that is not the target of any DllImport.
+        // GetPInvokeModuleNames must return ONLY the P/Invoke-backed module,
+        // not every ModuleRef in the module. A previous implementation iterated
+        // module.ModuleReferences directly and returned all of them, which
+        // would cause coincidental basename collisions to rename unrelated
+        // native files and corrupt the build.
+        string caller = TestAssemblyFactory.CreateAssemblyWithPInvokeAndStrayModuleRef(
+            Path.Combine(_tempDir, "ProbeApp.dll"),
+            "ProbeApp",
+            "nativebinding",
+            "unrelated_module");
+
+        var names = ReferenceRedirector.GetPInvokeModuleNames(caller);
+        Assert.Contains("nativebinding", names);
+        Assert.DoesNotContain("unrelated_module", names);
+    }
 }

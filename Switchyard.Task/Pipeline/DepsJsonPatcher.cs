@@ -109,15 +109,28 @@ public static class DepsJsonPatcher
         if (targets is null || libraries is null)
             return -1;
 
+        // Detect whether the original deps.json was minified (single line) or
+        // indented (multi-line). The SDK writes deps.json minified; reformatting
+        // it to indented creates large spurious diffs and can break tools that
+        // byte-compare the file. Preserve the original formatting.
+        bool writeIndented = json.Contains('\n');
+
         string runtimeTargetName = root["runtimeTarget"]?["name"]?.GetValue<string>() ?? string.Empty;
         if (runtimeTargetName.Length == 0)
         {
-            // Fall back to the first (only) target framework key.
-            foreach (var key in targets.AsObject().Select(k => k.Key))
-            {
-                runtimeTargetName = key;
-                break;
-            }
+            // Fall back to the first (only) target framework key. When the
+            // deps file has exactly one target this is unambiguous; when it
+            // has more than one (a multi-targeted build), picking the "first"
+            // is dictionary-order-dependent and could inject routed entries
+            // into the wrong frame — the actually-running TFM would then be
+            // missing the TPA entries and throw FileNotFoundException at
+            // runtime. Fail loudly in that case rather than guessing.
+            var targetKeys = targets.AsObject().Select(k => k.Key).ToList();
+            if (targetKeys.Count == 0)
+                return -1;
+            if (targetKeys.Count > 1)
+                return -1;
+            runtimeTargetName = targetKeys[0];
         }
         if (runtimeTargetName.Length == 0 || !targets.TryGetPropertyValue(runtimeTargetName, out var targetNode) || targetNode is not JsonObject targetFrame)
             return -1;
@@ -128,7 +141,7 @@ public static class DepsJsonPatcher
         // because an original may still be bound by unrouted callers (e.g.
         // SkiaSharp 2.88.9 used by Avalonia.Skia) and stripping its runtime
         // would break that binding.
-        var originalPackageIds = new HashSet<string>(StringComparer.Ordinal);
+        var originalPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (stripOriginalRuntimePackageIds is not null)
         {
             foreach (var id in stripOriginalRuntimePackageIds)
@@ -181,11 +194,14 @@ public static class DepsJsonPatcher
 
         // Neutralise the original package runtime entries so neither the build
         // TPA list nor the publish file stream resurrect the un-routed DLL.
+        // Package ids are case-insensitive (NuGet treats them so), and the
+        // deps.json key casing follows the nuspec's id casing which may differ
+        // from the PackageReference's casing — compare case-insensitively.
         foreach (var key in targetFrame.Select(k => k.Key).ToList())
         {
             foreach (var originalId in originalPackageIds)
             {
-                if (key.StartsWith(originalId + "/", StringComparison.Ordinal))
+                if (key.StartsWith(originalId + "/", StringComparison.OrdinalIgnoreCase))
                 {
                     if (targetFrame.TryGetPropertyValue(key, out var origNode) && origNode is JsonObject origTarget)
                         origTarget.Remove("runtime");
@@ -196,7 +212,7 @@ public static class DepsJsonPatcher
 
         File.WriteAllText(depsFilePath, root.ToJsonString(new System.Text.Json.JsonSerializerOptions
         {
-            WriteIndented = true,
+            WriteIndented = writeIndented,
         }));
         return routed.Count;
     }
@@ -217,15 +233,4 @@ public static class DepsJsonPatcher
         return version + ".0.0.0";
     }
 
-    /// <summary>
-    /// Strips the <c>.Switchyard.{version}</c> suffix from a routed assembly
-    /// name and returns the original package id, or <c>null</c> when the name
-    /// does not follow the routed-name convention.
-    /// </summary>
-    private static string? StripRoutedSuffix(string routedName)
-    {
-        const string suffix = ".Switchyard.";
-        int idx = routedName.LastIndexOf(suffix, StringComparison.Ordinal);
-        return idx < 0 ? null : routedName.Substring(0, idx);
-    }
 }

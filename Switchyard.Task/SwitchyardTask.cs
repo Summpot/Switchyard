@@ -227,10 +227,18 @@ public sealed class SwitchyardTask : Task
         }
         catch (Exception ex)
         {
-            Log.LogError("Switchyard pipeline failed: " + ex.Message);
-            LogMessage("Switchyard full exception details: " + ex);
+            // The full exception type, message, stack and inner-exception chain
+            // are logged via Log.LogError (not the Silent-gated LogMessage) so
+            // that a pipeline failure is always diagnosable even when the
+            // consumer set SwitchyardSilent=true. Pipeline failures often
+            // originate in AsmResolver or NuGet with an unhelpful top-level
+            // message; the inner exception is the actionable one.
+            Log.LogError("Switchyard pipeline failed: {0}: {1}", ex.GetType().Name, ex.Message);
             for (var inner = ex.InnerException; inner is not null; inner = inner.InnerException)
-                LogMessage("  Inner: " + inner.GetType().Name + ": " + inner.Message);
+                Log.LogError("  -> {0}: {1}", inner.GetType().Name, inner.Message);
+            // The verbose full-exception dump (with stack trace) is still gated
+            // by Silent — it is diagnostic chatter, not failure context.
+            LogMessage("Switchyard full exception details: " + ex);
             return false;
         }
     }

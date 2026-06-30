@@ -203,12 +203,21 @@
       <IlcCompileInput Include="@(ManagedBinary)"
                        Condition="'$(SwitchyardNewIntermediateAssemblyPath)' != ''" />
 
-      <_SwitchyardOriginalRoutedPackageReference
-          Include="$(OutDir)%(SwitchyardRoutedAssemblies.Identity).dll"
+      <!--
+        Routed package assemblies as NativeAOT compile references. The routed
+        DLL carries the rewritten DllImport module names and the routed
+        assembly identity, so ilc must link against it (NOT the original
+        {PackageId}.dll, which would defeat routing). SwitchyardRoutedAssemblies
+        carries RoutedFileName metadata (e.g. TargetLib.Switchyard.1.0.0.dll)
+        set by the Phase 1 task; reference the routed DLL from the intermediate
+        switchyard/ directory where the weaver wrote it.
+      -->
+      <_SwitchyardRoutedPackageReference
+          Include="$(IntermediateOutputPath)switchyard\%(SwitchyardRoutedAssemblies.RoutedFileName)"
           Condition="'@(SwitchyardRoutedAssemblies)' != ''
-                     And !Exists('$(IntermediateOutputPath)switchyard\%(SwitchyardRoutedAssemblies.Identity).Switchyard.%(SwitchyardRoutedAssemblies.RoutedVersion).dll')
-                     And Exists('$(OutDir)%(SwitchyardRoutedAssemblies.Identity).dll')" />
-      <IlcReference Include="@(_SwitchyardOriginalRoutedPackageReference)" />
+                     And '%(SwitchyardRoutedAssemblies.RoutedFileName)' != ''
+                     And Exists('$(IntermediateOutputPath)switchyard\%(SwitchyardRoutedAssemblies.RoutedFileName)')" />
+      <IlcReference Include="@(_SwitchyardRoutedPackageReference)" />
 
       <_SwitchyardNativeAotModule Include="@(_SwitchyardSafeDirectPInvokeLibraries->'%(ModuleName)')"
                                   Condition="'%(_SwitchyardSafeDirectPInvokeLibraries.ModuleName)' != ''" />

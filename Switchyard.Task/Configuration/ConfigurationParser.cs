@@ -34,7 +34,18 @@ public static class ConfigurationParser
 
             var version = item.GetMetadata("Version");
             if (string.IsNullOrWhiteSpace(version))
-                version = "*";
+            {
+                // A PackageReference without a Version is invalid for routing:
+                // IsOriginalVersion compares versions as strings, and the
+                // pipeline would treat every routed version as non-original
+                // (since none equals "*"), then fail trying to locate version
+                // "*" in the global packages folder with a misleading
+                // "package not restored" error. Surface the real cause here.
+                throw new InvalidOperationException(
+                    $"Switchyard: PackageReference '{packageId}' has SwitchyardRoutes metadata but no Version. " +
+                    "A concrete Version is required on every routed PackageReference so Switchyard can identify " +
+                    "the original version and locate the routed versions in the global packages folder.");
+            }
 
             var routeGroup = item.GetMetadata("SwitchyardRouteGroup");
             if (string.IsNullOrWhiteSpace(routeGroup))
