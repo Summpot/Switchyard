@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ConsumerModule</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Reference the same declared version as the app so NuGet does not flag a
+      downgrade. Switchyard routes this module's binding to 12.0.3 at weave time
+      (see the app's SwitchyardRoutes metadata), so the compiled reference is
+      rewritten to Newtonsoft.Json.Switchyard.12.0.3.
+    -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
+  </ItemGroup>
+
+</Project>

@@ -1,5 +1,6 @@
 <Solution>
   <Project Path="Switchyard/Switchyard.csproj" />
+  <Project Path="samples/PublishAotClangCrossCompile/PublishAotClangCrossCompile.csproj" />
   <Project Path="samples/WebpAnimationDemo/WebpAnimationDemo.csproj" />
   <Project Path="Switchyard.Task/Switchyard.Task.csproj" />
   <Project Path="test/Switchyard.Core.Tests/Switchyard.Core.Tests.csproj" />

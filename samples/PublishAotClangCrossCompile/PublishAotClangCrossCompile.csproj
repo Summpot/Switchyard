@@ -1,0 +1,89 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>PublishAotClangCrossCompile</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <SwitchyardEnabled>true</SwitchyardEnabled>
+    <SelfContained>true</SelfContained>
+    <PublishAot>true</PublishAot>
+    <!--
+      PublishAotClang cross-compiles Windows -> Linux RIDs. Default to linux-x64
+      so `dotnet publish` produces a Linux binary out of the box. On a Linux
+      host PublishAotClang's targets no-op (their Condition requires
+      IsOSPlatform('Windows')) and the SDK's native publish path is used, so the
+      same project still builds natively on Linux.
+    -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">linux-x64</RuntimeIdentifier>
+    <!-- Pin glibc to 2.17 so the output also runs on CentOS 7 / older glibc. -->
+    <GLibcVersion Condition="'$(RuntimeIdentifier)' != 'linux-arm'">2.17</GLibcVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!--
+    Switchyard project-SDK imports (dev-time): pull Sdk.props/targets and the
+    task DLL straight from the repo, mirroring samples/WebpAnimationDemo. Build
+    Switchyard.Task first (`dotnet build Switchyard.slnx -c Release`) so the task
+    assembly exists at the path below.
+  -->
+  <Import Project="..\..\Switchyard\Sdk\Sdk.props" />
+
+  <!--
+    ConsumerModule is a nested sub-project (a child folder). The SDK's default
+    Compile glob (**) would otherwise pull ConsumerModule's sources into THIS
+    app's compile, which would make Reporter bind to the app's own
+    Newtonsoft.Json view (13.0.1) and bypass Switchyard's routing of
+    ConsumerModule down to 12.0.3. Exclude the nested project's tree from the
+    app's compile so Reporter is resolved from the ProjectReference instead.
+  -->
+  <ItemGroup>
+    <Compile Remove="ConsumerModule\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The declared version (13.0.1) is what the app compiles against and keeps
+      at runtime. Switchyard routes the ConsumerModule caller DOWN to 12.0.3, so
+      one NativeAOT binary carries two Newtonsoft.Json versions:
+        PublishAotClangCrossCompile -> Newtonsoft.Json 13.0.1 (original)
+        ConsumerModule              -> Newtonsoft.Json.Switchyard.12.0.3 (routed)
+    -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.1">
+      <SwitchyardRoutes>PublishAotClangCrossCompile=13.0.1;ConsumerModule=12.0.3</SwitchyardRoutes>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      PublishAotClang: Zig-wrapped Clang toolchain for Windows -> Linux NativeAOT
+      cross-compile. Its build/PublishAotClang.targets auto-imports and hooks
+      SetupOSSpecificProps/LinkNative — disjoint from every Switchyard hook
+      point, so the two compose without conflict.
+    -->
+    <PackageReference Include="PublishAotClang" Version="1.0.5" />
+    <!-- Zig toolsets must be restored explicitly for the cross-compile toolchain. -->
+    <PackageReference Include="Vezel.Zig.Toolsets.win-x64" Version="0.16.0.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="ConsumerModule\ConsumerModule.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!--
+      Point at the locally built task DLL for development. UsingTask AssemblyFile
+      resolves this path relative to Sdk.targets (..\..\Switchyard\Sdk\), so from
+      the Sdk/ folder two ".." reach the repo root and Switchyard.Task\...
+    -->
+    <SwitchyardTaskAssemblyDir>..\..\Switchyard.Task\bin\$(Configuration)\</SwitchyardTaskAssemblyDir>
+  </PropertyGroup>
+
+  <Import Project="..\..\Switchyard\Sdk\Sdk.targets" />
+
+</Project>
